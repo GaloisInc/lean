@@ -54,6 +54,26 @@ lemma le_of_eq [weak_order α] {a b : α} : a = b → a ≤ b :=
 @[trans] lemma ge_trans [weak_order α] : ∀ {a b c : α}, a ≥ b → b ≥ c → a ≥ c :=
 λ a b c h₁ h₂, le_trans h₂ h₁
 
+theorem indirect_eq_right [weak_order α] {x y : α} (h : ∀ z : α, x ≤ z ↔ y ≤ z)
+: x = y :=
+  have hxy : x ≤ y, from (h y)^.mpr (le_refl y) ,
+  have hyx : y ≤ x, from (h x)^.mp  (le_refl x) ,
+  show x = y, from le_antisymm hxy hyx
+
+theorem indirect_le_right [weak_order α] {x y : α} (h : ∀ z : α, y ≤ z → x ≤ z)
+: x ≤ y :=
+  h _ (le_refl y)
+
+theorem indirect_eq_left [weak_order α] {x y : α} (h : ∀ z : α, z ≤ x ↔ z ≤ y)
+: x = y :=
+  have hxy : x ≤ y, from (h x)^.mp  (le_refl x) ,
+  have hyx : y ≤ x, from (h y)^.mpr (le_refl y) ,
+  show x = y, from le_antisymm hxy hyx
+
+theorem indirect_le_left [weak_order α] {x y : α} (h : ∀ z : α, z ≤ x → z ≤ y)
+: x ≤ y :=
+  h _ (le_refl x)
+
 lemma le_total [linear_weak_order α] : ∀ a b : α, a ≤ b ∨ b ≤ a :=
 linear_weak_order.le_total
 
@@ -196,6 +216,9 @@ match lt_trichotomy a b with
 | or.inr (or.inl heq) := or.inr (heq ▸ le_refl a)
 | or.inr (or.inr hgt) := or.inr (le_of_lt hgt)
 end
+
+lemma lt_of_not_le [linear_strong_order_pair α] {a b : α} : ¬ a ≤ b → b < a :=
+or.resolve_right (lt_or_ge b a)
 
 lemma le_or_gt [linear_strong_order_pair α] (a b : α) : a ≤ b ∨ a > b :=
 or.swap (lt_or_ge b a)

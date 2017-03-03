@@ -94,6 +94,9 @@ lemma pred_le_pred {n m : ℕ} : n ≤ m → pred n ≤ pred m :=
 lemma le_of_succ_le_succ {n m : ℕ} : succ n ≤ succ m → n ≤ m :=
 pred_le_pred
 
+lemma succ_le_succ_iff_le (n m : ℕ) : succ n ≤ succ m ↔ n ≤ m :=
+⟨ le_of_succ_le_succ , succ_le_succ ⟩
+
 instance decidable_le : ∀ a b : ℕ, decidable (a ≤ b)
 | 0     b     := is_true (zero_le b)
 | (a+1) 0     := is_false (not_succ_le_zero a)

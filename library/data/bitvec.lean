@@ -224,7 +224,7 @@ lemma div_mul_sub_one_cancel {n p k : ℕ} (Hp : 1 ≤ p)
 :  n / p ≤ p^k - 1 :=
 begin
   assert H' : n / p ≤ (p*p^k - 1) / p,
-  { apply nat.div_le_div H _ },
+  { apply nat.div_le_div H Hp },
   rw nat.div_pred_to_pred_div (p^k) Hp at H',
   apply H'
 end

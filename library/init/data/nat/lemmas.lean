@@ -146,6 +146,15 @@ lemma eq_zero_or_eq_zero_of_mul_eq_zero : ∀ {n m : ℕ}, n * m = 0 → n = 0 �
     exact or.inr (eq_zero_of_add_eq_zero_left h)
   end
 
+lemma mul_eq_zero_iff_eq_zero_or_eq_zero (n m : ℕ)
+: n * m = 0 ↔ n = 0 ∨ m = 0 :=
+begin
+  split,
+  { apply eq_zero_or_eq_zero_of_mul_eq_zero },
+  intro h, cases h with h h
+  ; simp [h,nat.mul_zero,nat.zero_mul]
+end
+
 instance : comm_semiring nat :=
 {add            := nat.add,
  add_assoc      := nat.add_assoc,
@@ -248,6 +257,9 @@ lemma not_pos_of_eq_zero {n : ℕ} (h : ¬ 0 < n) : n = 0 :=
 
 lemma le_zero_of_eq_zero {n : ℕ} (h : n ≤ 0) : n = 0 :=
       nat.le_antisymm h (nat.zero_le _)
+
+lemma le_zero_iff_eq_zero {n : ℕ} : n ≤ 0 ↔ n = 0 :=
+      ⟨ le_zero_of_eq_zero , assume h, eq.subst h (le_refl n) ⟩
 
 lemma lt_zero_iff_false (a : ℕ) : a < 0 ↔ false :=
 iff_false_intro (not_lt_zero a)
@@ -770,78 +782,155 @@ lemma pred_inj : ∀ {a b : nat}, a > 0 → b > 0 → nat.pred a = nat.pred b �
 
 /- TODO(Leo): sub + inequalities -/
 
+protected theorem le_sub_le_sub_right {n m k : ℕ}
+  (h₀ : k ≤ m)
+  (h₁ : n - k ≤ m - k)
+: n ≤ m :=
+begin
+  revert k m,
+  induction n with n ; intros k m h₀ h₁,
+  { apply zero_le },
+  { cases k with k,
+    { apply h₁ },
+    cases m with m,
+    { cases not_succ_le_zero _ h₀ },
+    { simp [succ_sub_succ] at h₁,
+      apply succ_le_succ,
+      apply ih_1 _ h₁,
+      apply le_of_succ_le_succ h₀ }, }
+end
+
+protected theorem sub_le_sub_right_iff (n m k : ℕ)
+  (h : k ≤ m)
+: n - k ≤ m - k ↔ n ≤ m :=
+⟨ nat.le_sub_le_sub_right h , assume h, nat.sub_le_sub_right h k ⟩
+
+-- this is a Galois connection
+theorem pred_le_to_le_succ (x y : ℕ) : pred x ≤ y ↔ x ≤ succ y :=
+begin
+  split,
+  { apply le_succ_of_pred_le },
+  { cases x with x ; intro h,
+    { apply zero_le },
+    { apply le_of_succ_le_succ h } }
+end
+
+-- this is a Galois connection
+theorem add_le_to_le_sub (x : ℕ) {y k : ℕ}
+  (h : k ≤ y)
+: x + k ≤ y ↔ x ≤ y - k :=
+begin
+  rw [-nat.add_sub_cancel x k,nat.sub_le_sub_right_iff _ _ _ h,nat.add_sub_cancel]
+end
+
+-- this is a Galois connection
+theorem sub_le_to_le_add (x y k : ℕ) : x - k ≤ y ↔ x ≤ y + k :=
+begin
+  revert y,
+  induction k with k ; intro y, refl,
+  rw [sub_succ,add_succ,pred_le_to_le_succ,ih_1],
+  apply eq.to_iff,
+  apply congr_arg,
+  apply succ_add
+end
+
+theorem le_pred_of_succ_le {x y : ℕ} : succ x ≤ y → x ≤ pred y :=
+begin
+  cases y with y ; intro h,
+  { cases not_succ_le_zero _ h },
+  { apply le_of_succ_le_succ h,  }
+end
+
 /- div -/
+
+-- this is a Galois connection with
+--   f x = x * k
+--   g y = y / k
+theorem le_div_iff_mul_le (x y : ℕ) {k : ℕ}
+  (Hk : k > 0)
+: x ≤ y / k ↔ x * k ≤ y :=
+begin
+  -- Hk is needed because, despite div being made total, y / 0 := 0
+  --     x * 0 ≤ y ↔ x ≤ y / 0
+  --   ↔ 0 ≤ y ↔ x ≤ 0
+  --   ↔ true ↔ x = 0
+  --   ↔ x = 0
+  revert x,
+  apply well_founded.induction lt_wf y _,
+  { clear y,
+    intros y IH x,
+    cases decidable.em (k ≤ y) with h h,
+    -- step: k ≤ y
+    { note h' := and.intro Hk h,
+      rw [div_def,dif_pos h'],
+      cases x with x,
+      { simp [zero_mul,zero_le_iff_true] },
+      { assert Hlt : y - k < y,
+        { apply sub_lt _ Hk,
+          apply lt_of_lt_of_le Hk h },
+        change _ + 1 ≤ _ + 1 ↔ _,
+        rw [ add_le_add_right_iff
+           , IH (y - k) Hlt x
+           , succ_mul,add_le_to_le_sub _ h] } },
+    -- base case: y < k
+    { assert h' : ¬ (0 < k ∧ k ≤ y),
+      { apply mt _ h, apply and.right },
+      rw [div_def,dif_neg h'],
+      cases x with x,
+      { simp [zero_mul,zero_le_iff_true] },
+      { simp [succ_mul,succ_le_zero_iff_false],
+        apply not_le_of_gt,
+        apply lt_of_lt_of_le,
+        { apply lt_of_not_le h },
+        { apply le_add_right } } } }
+end
 
 theorem zero_div : ∀ m : ℕ, 0 / m = 0
   | zero := by refl
   | (succ n) := by refl
 
-theorem div_le_div
-: ∀ {y x}, x ≤ y → ∀ z : ℕ, x / z ≤ y / z :=
-  take y,
-  let P y := ∀ {x}, x ≤ y → ∀ z : ℕ, x / z ≤ y / z in
-  @well_founded.induction _ _ (measure_wf id) P y $
-    take y,
-    assume IH : ∀ (y' : ℕ), y' < y → P y',
-    take x,
-    assume h' : x ≤ y,
-    take z,
-    if h : 0 < z ∧ z ≤ x then
-      have Hz : 0 < z, from h^.left,
-      have Hx : 0 < z ∧ z ≤ x,    from h,
-      have Hy : 0 < z ∧ z ≤ y,    from ⟨Hz,nat.le_trans h^.right h'⟩,
-      have Hxy_z : x - z ≤ y - z, from nat.sub_le_sub_right h' z,
-      have Hyz_z : y - z < y,     from nat.sub_lt (lt_of_lt_of_le Hz Hy^.right) Hz,
-      begin
-        rw [div_def x z,dif_pos Hx,div_def y z,dif_pos Hy,add_le_add_right_iff] ,
-        apply IH (y - z) Hyz_z Hxy_z
-      end
-    else
-      have h' : ¬ 0 < z ∨ ¬ z ≤ x,
-         from classical.not_and_of_not_or_not h,
-      begin
-        cases h' with h₀ h₀,
-        { note h₁ := not_pos_of_eq_zero h₀,
-          simp [h₁], cases x, cases y, refl, refl, cases y, refl, refl },
-        { assert Hx : ¬ (0 < z ∧ z ≤ x),
-          { intro HH, apply (h₀ HH^.right) },
-            rw [div_def x z,dif_neg Hx], apply zero_le }
-     end
-
+theorem div_le_div {x y : ℕ} (h : x ≤ y) {z : ℕ} (hz : z > 0)
+: x / z ≤ y / z :=
+begin
+  apply indirect_le_left,
+  intro p,
+  rw [le_div_iff_mul_le _ _ hz,le_div_iff_mul_le _ _ hz],
+  intro h',
+  transitivity,
+  { apply h' }, { apply h }
+end
 theorem div_pred_to_pred_div
-: ∀ (x : ℕ) {z : ℕ}, 1 ≤ z → (z * x - 1) / z = x - 1
- | zero z := assume _, begin cases z, refl, change 0 / succ a = 0 - 1, refl end
- | (succ x) z :=
-    assume Pz : 1 ≤ z,
+: ∀ (x : ℕ) {z : ℕ} (hz : 1 ≤ z), (z * x - 1) / z = x - 1
+ | zero z _ := begin cases z, refl, change 0 / succ a = 0 - 1, refl end
+ | (succ x) z Pz :=
     if Hpos : 1 ≤ x then
-    have Pxz : 1 ≤ z * x,
-      from nat.mul_le_mul Pz Hpos,
-    have Pz_le_zx_z_1 : z ≤ z * x + z - 1, from calc
-         z * x + z - 1
-       = z * x + (z - 1) : by rw -nat.add_sub_assoc Pz
-...    ≥ 1 + (z - 1)     : nat.add_le_add_right Pxz _
-...    = 1 + z - 1       : by rw -nat.add_sub_assoc Pz
-...    = z               : by rw nat.add_sub_cancel_left,
-    have Pdiv : 0 < z ∧ z ≤ z * x + z - 1, from ⟨Pz,Pz_le_zx_z_1⟩,
-    calc
-       (z * succ x - 1) / z
-     = (z * x + z - 1) / z           : by refl
-...  = (z * x + z - 1 - z) / z + 1   : by rw [div_def,dif_pos Pdiv]
-...  = 1 + (z + z * x - 1 - z) / z   : by simp
-...  = 1 + (z + (z * x - 1) - z) / z : by rw [@nat.add_sub_assoc _ _ Pxz]
-...  = 1 + (z * x - 1) / z           : by rw nat.add_sub_cancel_left
-...  = 1 + (x - 1)                   : by rw [div_pred_to_pred_div _ Pz]
-...  = (x + 1) - 1                   : by rw [nat.add_comm x 1,@nat.add_sub_assoc _ _ Hpos]
-...  = succ x - 1                    : by refl
-   else
-   have Pzero : x = 0,
-     from not_pos_of_eq_zero Hpos,
-   have Hz : ¬ z ≤ pred z,
-     from not_le_of_gt $ lt_of_succ_lt_succ
-       begin rw succ_pred_eq_of_pos Pz, apply nat.succ_le_succ, refl end,
-   have Pdiv : ¬(0 < z ∧ z ≤ z - 1),
-     from Hz ∘ and.elim_right,
-   by rw [Pzero,mul_one,div_def,dif_neg Pdiv]
+    begin
+      assert Pxz : 1 ≤ z * x,
+      { apply nat.mul_le_mul Pz Hpos },
+      assert Pz_le_zx_z_1 : z ≤ z * x + z - 1,
+      { assert h : z = 1 + (z - 1),
+        { rw [-nat.add_sub_assoc Pz,nat.add_sub_cancel_left] },
+        rw [nat.add_sub_assoc Pz (z * x)],
+        transitivity, { rw h },
+        apply add_le_add_right Pxz },
+      assert Pdiv : 0 < z ∧ z ≤ z * x + z - 1, { exact ⟨Pz,Pz_le_zx_z_1⟩ },
+      rw [mul_succ,div_def,dif_pos Pdiv,add_comm _ z
+         ,@nat.add_sub_assoc _ _ Pxz
+         ,nat.add_sub_cancel_left
+         ,div_pred_to_pred_div _ Pz
+         ,nat.sub_add_cancel Hpos
+         ,succ_sub_succ,nat.sub_zero]
+    end
+    else
+    begin
+      assert Pzero : x = 0, { apply not_pos_of_eq_zero Hpos },
+      assert Hz : ¬ z ≤ pred z,
+      { apply not_le_of_gt, apply lt_of_succ_lt_succ,
+        rw succ_pred_eq_of_pos Pz, apply nat.succ_le_succ, refl, },
+      assert Pdiv : ¬(0 < z ∧ z ≤ z - 1),
+      { revert Hz, apply mt, apply and.elim_right },
+      rw [Pzero,mul_one,div_def,dif_neg Pdiv]
+    end
 
 /- mod -/
 
