@@ -54,25 +54,22 @@ end
 begin
   induction e,
   reflexivity,
-  { cases v_1 with v₁, cases v₁, all_goals {simp} },
+  { cases e with v₁, cases v₁, all_goals {simp} },
   { simp [*] }
 end
 
-class Quote {V : inout Type u} (l : inout Env V) (n : Value) {V' : inout Type v} (r : inout Env V') :=
+class Quote {V : out_param $ Type u} (l : out_param $ Env V) (n : Value) {V' : out_param $ Type v} (r : out_param $ Env V') :=
 (quote      : Expr (sum V V'))
 (eval_quote : evalExpr (merge l r) quote = n)
 
-def quote {V : Type u} {l : Env V} (n : nat) {V' : Type v} {r : Env V'} [Quote l n r] : Expr (sum V V') :=
-Quote.quote l n r
+export Quote (quote eval_quote)
+attribute [simp] eval_quote
 
-@[simp] lemma eval_quote {V : Type u} {l : Env V} (n : nat) {V' : Type v} {r : Env V'} [Quote l n r] : evalExpr (merge l r) (quote n) = n :=
-Quote.eval_quote l n r
-
-instance quote_one V (v : Env V) : Quote v 1 novars :=
+instance quote_one (V) (v : Env V) : Quote v 1 novars :=
 { quote      := One,
   eval_quote := rfl }
 
-instance quote_mul {V : Type u} (v : Env V) n {V' : Type v} (v' : Env V') m {V'' : Type w} (v'' : Env V'')
+instance quote_mul {V : Type u} (v : Env V) (n) {V' : Type v} (v' : Env V') (m) {V'' : Type w} (v'' : Env V'')
                    [Quote v n v'] [Quote (merge v v') m v''] :
                    Quote v (n * m) (merge v' v'') :=
 { quote      := Mult (map_var sum_assoc (map_var inl (quote n))) (map_var sum_assoc (quote m)),

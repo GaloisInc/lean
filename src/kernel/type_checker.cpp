@@ -24,7 +24,8 @@ Author: Leonardo de Moura
 #include "util/task_builder.h"
 
 namespace lean {
-static expr * g_dont_care = nullptr;
+static name * g_kernel_fresh = nullptr;
+static expr * g_dont_care    = nullptr;
 
 optional<expr> type_checker::expand_macro(expr const & m) {
     lean_assert(is_macro(m));
@@ -34,7 +35,7 @@ optional<expr> type_checker::expand_macro(expr const & m) {
 /** \brief Return the body of the given binder, where the free variable #0 is replaced with a fresh local constant.
     It also returns the fresh local constant. */
 pair<expr, expr> type_checker::open_binding_body(expr const & e) {
-    expr local     = mk_local(mk_fresh_name(), binding_name(e), binding_domain(e), binding_info(e));
+    expr local     = mk_local(m_name_generator.next(), binding_name(e), binding_domain(e), binding_info(e));
     return mk_pair(instantiate(binding_body(e), local), local);
 }
 
@@ -112,7 +113,7 @@ expr type_checker::infer_lambda(expr const & _e, bool infer_only) {
         expr d = instantiate_rev(binding_domain(e), ls.size(), ls.data());
         if (binding_name(e).is_anonymous())
             throw_kernel_exception(m_env, "invalid anonymous binder name", e);
-        expr l = mk_local(mk_fresh_name(), binding_name(e), d, binding_info(e));
+        expr l = mk_local(m_name_generator.next(), binding_name(e), d, binding_info(e));
         ls.push_back(l);
         if (!infer_only) {
             ensure_sort_core(infer_type_core(d, infer_only), d);
@@ -139,7 +140,7 @@ expr type_checker::infer_pi(expr const & _e, bool infer_only) {
         expr d  = instantiate_rev(binding_domain(e), ls.size(), ls.data());
         expr t1 = ensure_sort_core(infer_type_core(d, infer_only), d);
         us.push_back(sort_level(t1));
-        expr l  = mk_local(mk_fresh_name(), binding_name(e), d, binding_info(e));
+        expr l  = mk_local(m_name_generator.next(), binding_name(e), d, binding_info(e));
         ls.push_back(l);
         e = binding_body(e);
     }
@@ -448,7 +449,7 @@ bool type_checker::is_def_eq_binding(expr t, expr s) {
             // local is used inside t or s
             if (!var_s_type)
                 var_s_type = instantiate_rev(binding_domain(s), subst.size(), subst.data());
-            subst.push_back(mk_local(mk_fresh_name(), binding_name(s), *var_s_type, binding_info(s)));
+            subst.push_back(mk_local(m_name_generator.next(), binding_name(s), *var_s_type, binding_info(s)));
         } else {
             subst.push_back(*g_dont_care); // don't care
         }
@@ -578,6 +579,8 @@ void type_checker::cache_failure(expr const & t, expr const & s) {
         m_failure_cache.insert(mk_pair(s, t));
 }
 
+static name * g_id_delta = nullptr;
+
 /** \brief Perform one lazy delta-reduction step.
      Return
      - l_true if t_n and s_n are definitionally equal.
@@ -590,6 +593,20 @@ auto type_checker::lazy_delta_reduction_step(expr & t_n, expr & s_n) -> reductio
     auto d_s = is_delta(s_n);
     if (!d_t && !d_s) {
         return reduction_status::DefUnknown;
+    } else if (d_t && d_t->get_name() == *g_id_delta) {
+        t_n = whnf_core(*unfold_definition(t_n));
+        if (t_n == s_n)
+            return reduction_status::DefEqual; /* id_delta t =?= t */
+        if (auto u = unfold_definition(t_n))   /* id_delta t =?= s  ===>  unfold(t) =?= s */
+            t_n = whnf_core(*u);
+        return reduction_status::Continue;
+    } else if (d_s && d_s->get_name() == *g_id_delta) {
+        s_n = whnf_core(*unfold_definition(s_n));
+        if (t_n == s_n)
+            return reduction_status::DefEqual; /* t =?= id_delta t */
+        if (auto u = unfold_definition(s_n))   /* t =?= id_delta s ===>  t =?= unfold(s) */
+            s_n = whnf_core(*u);
+        return reduction_status::Continue;
     } else if (d_t && !d_s) {
         t_n = whnf_core(*unfold_definition(t_n));
     } else if (!d_t && d_s) {
@@ -703,7 +720,7 @@ bool type_checker::is_def_eq(expr const & t, expr const & s) {
 }
 
 type_checker::type_checker(environment const & env, bool memoize, bool trusted_only):
-    m_env(env), m_memoize(memoize), m_trusted_only(trusted_only), m_params(nullptr) {
+    m_env(env), m_name_generator(*g_kernel_fresh), m_memoize(memoize), m_trusted_only(trusted_only), m_params(nullptr) {
 }
 
 type_checker::~type_checker() {}
@@ -790,10 +807,15 @@ certified_declaration certify_unchecked::certify_or_check(environment const & en
 }
 
 void initialize_type_checker() {
-    g_dont_care = new expr(Const("dontcare"));
+    g_id_delta     = new name("id_delta");
+    g_dont_care    = new expr(Const("dontcare"));
+    g_kernel_fresh = new name("_kernel_fresh");
+    register_name_generator_prefix(*g_kernel_fresh);
 }
 
 void finalize_type_checker() {
     delete g_dont_care;
+    delete g_id_delta;
+    delete g_kernel_fresh;
 }
 }

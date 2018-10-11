@@ -37,7 +37,7 @@ struct mk_pattern_fn {
     typedef rb_expr_tree                           expr_set;
     typedef rb_map<level, level, level_quick_cmp>  level2meta;
     typedef rb_expr_map<expr>                      expr2meta;
-    type_context m_ctx;
+    type_context_old m_ctx;
     level2meta   m_level2meta;
     expr2meta    m_expr2meta;
     level_set    m_found_levels;
@@ -145,14 +145,14 @@ vm_obj tactic_mk_pattern(vm_obj const & ls, vm_obj const & es, vm_obj const & t,
 }
 
 /*
-meta_constant match_pattern_core : transparency → pattern → expr → tactic (list expr)
+meta_constant match_pattern : pattern → expr → transparency → tactic (list expr)
 */
-vm_obj tactic_match_pattern_core(vm_obj const & m, vm_obj const & p, vm_obj const & e, vm_obj const & s) {
+vm_obj tactic_match_pattern(vm_obj const & p, vm_obj const & e, vm_obj const & m, vm_obj const & s) {
     TRY;
     expr t; list<level> uos; list<expr> os; unsigned nuvars, nmvars;
     get_pattern_fields(p, t, uos, os, nuvars, nmvars);
-    type_context ctx = mk_type_context_for(s, m);
-    type_context::tmp_mode_scope scope(ctx, nuvars, nmvars);
+    type_context_old ctx = mk_type_context_for(s, m);
+    type_context_old::tmp_mode_scope scope(ctx, nuvars, nmvars);
     if (ctx.is_def_eq(t, to_expr(e))) {
         for (unsigned i = 0; i < nuvars; i++) {
             if (!ctx.get_tmp_uvar_assignment(i))
@@ -178,8 +178,8 @@ vm_obj tactic_match_pattern_core(vm_obj const & m, vm_obj const & p, vm_obj cons
 }
 
 void initialize_match_tactic() {
-    DECLARE_VM_BUILTIN(name({"tactic", "mk_pattern"}),         tactic_mk_pattern);
-    DECLARE_VM_BUILTIN(name({"tactic", "match_pattern_core"}), tactic_match_pattern_core);
+    DECLARE_VM_BUILTIN(name({"tactic", "mk_pattern"}),    tactic_mk_pattern);
+    DECLARE_VM_BUILTIN(name({"tactic", "match_pattern"}), tactic_match_pattern);
 }
 
 void finalize_match_tactic() {

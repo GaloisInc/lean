@@ -7,6 +7,7 @@ Author: Leonardo de Moura
 #include <string>
 #include <algorithm>
 #include <functional>
+#include <cctype>
 #include "util/sstream.h"
 #include "library/module.h"
 #include "library/documentation.h"
@@ -81,7 +82,7 @@ static unsigned get_indentation(std::string const & s) {
     unsigned r  = 0;
     bool searching = true;
     unsigned i = 0;
-    for (auto it = s.begin(); it != s.end(); it++) {
+    for (auto it = (const unsigned char*)s.data(), e = (const unsigned char*)s.data() + s.size(); it != e; ++it) {
         if (*it == '\n') {
             i = 0;
             searching = true;

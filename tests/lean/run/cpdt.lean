@@ -34,10 +34,10 @@ def reassoc : exp → exp
   | _              := Mult e1' e2'
   end
 
-attribute [simp] mul_add times reassoc eeval
+attribute [simp] mul_add times reassoc eeval mul_comm mul_assoc mul_left_comm
 
 theorem eeval_times (k e) : eeval (times k e) = k * eeval e :=
 by induction e; simp [*]
 
 theorem reassoc_correct (e) : eeval (reassoc e) = eeval e :=
-by induction e; simp [*]; cases (reassoc e2); rsimp
+by induction e; simp [*]; cases (reassoc e_e2); rsimp

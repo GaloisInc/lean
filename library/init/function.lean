@@ -51,11 +51,13 @@ lemma left_id (f : α → β) : id ∘ f = f := rfl
 
 lemma right_id (f : α → β) : f ∘ id = f := rfl
 
+@[simp] lemma comp_app (f : β → φ) (g : α → β) (a : α) : (f ∘ g) a = f (g a) := rfl
+
 lemma comp.assoc (f : φ → δ) (g : β → φ) (h : α → β) : (f ∘ g) ∘ h = f ∘ (g ∘ h) := rfl
 
-lemma comp.left_id (f : α → β) : id ∘ f = f := rfl
+@[simp] lemma comp.left_id (f : α → β) : id ∘ f = f := rfl
 
-lemma comp.right_id (f : α → β) : f ∘ id = f := rfl
+@[simp] lemma comp.right_id (f : α → β) : f ∘ id = f := rfl
 
 lemma comp_const_right (f : β → φ) (b : β) : f ∘ (const α b) = const α (f b) := rfl
 

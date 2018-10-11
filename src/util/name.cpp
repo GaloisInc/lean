@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 
 Author: Leonardo de Moura
 */
+#include <cctype>
 #include <cstring>
 #include <vector>
 #include <algorithm>
@@ -30,7 +31,8 @@ bool is_letter_like_unicode(unsigned u) {
             (0x391  <= u && u <= 0x3A9 && u != 0x3A0 && u != 0x3A3) || // Upper greek, but Pi and Sigma
             (0x3ca  <= u && u <= 0x3fb) ||               // Coptic letters
             (0x1f00 <= u && u <= 0x1ffe) ||              // Polytonic Greek Extended Character Set
-            (0x2100 <= u && u <= 0x214f);                // Letter like block
+            (0x2100 <= u && u <= 0x214f) ||              // Letter like block
+            (0x1d49c <= u && u <= 0x1d59f);              // Latin letters, Script, Double-struck, Fractur
 }
 bool is_sub_script_alnum_unicode(unsigned u) {
     return
@@ -39,14 +41,14 @@ bool is_sub_script_alnum_unicode(unsigned u) {
             (0x1d62 <= u && u <= 0x1d6a);   // letter-like subscripts
 }
 
-bool is_id_first(char const * begin, char const * end) {
+bool is_id_first(unsigned char const * begin, unsigned char const * end) {
     if (std::isalpha(*begin) || *begin == '_')
         return true;
     unsigned u = utf8_to_unicode(begin, end);
     return u == id_begin_escape || is_letter_like_unicode(u);
 }
 
-bool is_id_rest(char const * begin, char const * end) {
+bool is_id_rest(unsigned char const * begin, unsigned char const * end) {
     if (std::isalnum(*begin) || *begin == '_' || *begin == '\'')
         return true;
     unsigned u = utf8_to_unicode(begin, end);
@@ -439,6 +441,8 @@ name name::replace_prefix(name const & prefix, name const & new_prefix) const {
     if (is_anonymous())
         return *this;
     name p = get_prefix().replace_prefix(prefix, new_prefix);
+    if (p.m_ptr == m_ptr)
+        return *this;
     if (is_string())
         return name(p, get_string());
     else
@@ -542,6 +546,16 @@ serializer & operator<<(serializer & s, name const & n) {
 
 name read_name(deserializer & d) {
     return d.get_extension<name_deserializer>(g_name_sd->m_deserializer_extid).read();
+}
+
+bool is_internal_name(name const & n) {
+    name it = n;
+    while (!it.is_anonymous()) {
+        if (!it.is_anonymous() && it.is_string() && it.get_string() && it.get_string()[0] == '_')
+            return true;
+        it = it.get_prefix();
+    }
+    return false;
 }
 
 void initialize_name() {

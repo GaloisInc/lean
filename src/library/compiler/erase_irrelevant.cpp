@@ -93,7 +93,7 @@ class erase_irrelevant_fn : public compiler_step_visitor {
     }
 
     expr erase_type(expr const & e) {
-        if (closed(e))
+        if (closed(e) && !has_local(e))
             return e; // keep closed types for runtime debugger
         else
             return *g_neutral_expr;
@@ -159,7 +159,7 @@ class erase_irrelevant_fn : public compiler_step_visitor {
                 unsigned carity = get_constructor_arity(env(), cnames[i]);
                 lean_assert(carity >= nparams);
                 unsigned data_sz = carity - nparams;
-                type_context::tmp_locals locals(ctx());
+                type_context_old::tmp_locals locals(ctx());
                 expr new_minor   = minors[i];
                 for (unsigned j = 0; j < data_sz; j++) {
                     if (!is_lambda(new_minor))
@@ -242,7 +242,7 @@ class erase_irrelevant_fn : public compiler_step_visitor {
         return add_args(major, 6, args);
     }
 
-    expr consume_lambdas(type_context::tmp_locals & locals, expr e) {
+    expr consume_lambdas(type_context_old::tmp_locals & locals, expr e) {
         while (true) {
             if (is_lambda(e)) {
                 expr local = locals.push_local_from_binding(e);
@@ -272,7 +272,7 @@ class erase_irrelevant_fn : public compiler_step_visitor {
             return *g_unreachable_expr;
         lean_assert(args.size() >= basic_arity + 1);
         expr major = args[nparams + nindices + 4];
-        type_context::tmp_locals locals(ctx());
+        type_context_old::tmp_locals locals(ctx());
         major = consume_lambdas(locals, major);
         major = visit(major);
         major = erase_lambda_let_types(locals.mk_lambda(major));
@@ -415,11 +415,12 @@ class erase_irrelevant_fn : public compiler_step_visitor {
     }
 
 public:
-    erase_irrelevant_fn(environment const & env):compiler_step_visitor(env) {}
+    erase_irrelevant_fn(environment const & env, abstract_context_cache & cache):
+        compiler_step_visitor(env, cache) {}
 };
 
-expr erase_irrelevant(environment const & env, expr const & e) {
-    return erase_irrelevant_fn(env)(e);
+expr erase_irrelevant(environment const & env, abstract_context_cache & cache, expr const & e) {
+    return erase_irrelevant_fn(env, cache)(e);
 }
 
 void initialize_erase_irrelevant() {

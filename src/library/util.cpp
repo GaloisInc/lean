@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Leonardo de Moura
 */
 #include <algorithm>
+#include <string>
 #include "util/fresh_name.h"
 #include "kernel/find_fn.h"
 #include "kernel/free_vars.h"
@@ -23,8 +24,26 @@ Author: Leonardo de Moura
 #include "library/projection.h"
 #include "library/replace_visitor.h"
 #include "library/type_context.h"
+#include "library/string.h"
+#include "version.h"
+#include "githash.h" // NOLINT
 
 namespace lean {
+name mk_unused_name(environment const & env, name const & n, unsigned & idx) {
+    name curr = n;
+    while (true) {
+        if (!env.find(curr))
+            return curr;
+        curr = n.append_after(idx);
+        idx++;
+    }
+}
+
+name mk_unused_name(environment const & env, name const & n) {
+    unsigned idx = 1;
+    return mk_unused_name(env, n, idx);
+}
+
 /** \brief Return the "arity" of the given type. The arity is the number of nested pi-expressions. */
 unsigned get_arity(expr type) {
     unsigned r = 0;
@@ -35,18 +54,24 @@ unsigned get_arity(expr type) {
     return r;
 }
 
-bool is_internal_name(name const & n) {
-    name it = n;
-    while (!it.is_anonymous()) {
-        if (!it.is_anonymous() && it.is_string() && it.get_string() && it.get_string()[0] == '_')
-            return true;
-        it = it.get_prefix();
+optional<expr> is_optional_param(expr const & e) {
+    if (is_app_of(e, get_opt_param_name(), 2)) {
+        return some_expr(app_arg(e));
+    } else {
+        return none_expr();
     }
-    return false;
+}
+
+optional<expr_pair> is_auto_param(expr const & e) {
+    if (is_app_of(e, get_auto_param_name(), 2)) {
+        return optional<expr_pair>(app_arg(app_fn(e)), app_arg(e));
+    } else {
+        return optional<expr_pair>();
+    }
 }
 
 level get_level(abstract_type_context & ctx, expr const & A) {
-    expr S = ctx.whnf(ctx.infer(A));
+    expr S = ctx.relaxed_whnf(ctx.infer(A));
     if (!is_sort(S))
         throw exception("invalid expression, sort expected");
     return sort_level(S);
@@ -80,9 +105,8 @@ bool is_app_of(expr const & t, name const & f_name, unsigned nargs) {
     return is_constant(fn) && const_name(fn) == f_name && get_app_num_args(t) == nargs;
 }
 
-expr consume_opt_param(expr const & type) {
-    if (is_app_of(type, get_opt_param_name(), 2)) {
-        /* make sure (opt_param 'a value) does not affect results */
+expr consume_auto_opt_param(expr const & type) {
+    if (is_app_of(type, get_auto_param_name(), 2) || is_app_of(type, get_opt_param_name(), 2)) {
         return app_arg(app_fn(type));
     } else {
         return type;
@@ -207,7 +231,7 @@ bool is_reflexive_datatype(abstract_type_context & tc, name const & n) {
             if (is_pi(arg) && find(arg, [&](expr const & e, unsigned) { return is_constant(e) && const_name(e) == n; })) {
                 return true;
             }
-            expr local = mk_local(mk_fresh_name(), binding_domain(type));
+            expr local = mk_local(tc.next_name(), binding_domain(type));
             type = instantiate(binding_body(type), local);
         }
     }
@@ -327,8 +351,8 @@ unsigned get_num_inductive_hypotheses_for(environment const & env, name const & 
     lean_assert(rec_mask.empty());
     name I_name = *inductive::is_intro_rule(env, n);
     inductive::inductive_decl decl = *inductive::is_inductive_decl(env, I_name);
-    type_context tc(env);
-    type_context::tmp_locals locals(tc);
+    type_context_old tc(env);
+    type_context_old::tmp_locals locals(tc);
     expr type   = tc.whnf(env.get(n).get_type());
     unsigned r  = 0;
     while (is_pi(type)) {
@@ -404,9 +428,9 @@ expr to_telescope(type_checker & ctx, expr type, buffer<expr> & telescope, optio
         type = new_type;
         expr local;
         if (binfo)
-            local = mk_local(mk_fresh_name(), binding_name(type), binding_domain(type), *binfo);
+            local = mk_local(ctx.next_name(), binding_name(type), binding_domain(type), *binfo);
         else
-            local = mk_local(mk_fresh_name(), binding_name(type), binding_domain(type), binding_info(type));
+            local = mk_local(ctx.next_name(), binding_name(type), binding_domain(type), binding_info(type));
         telescope.push_back(local);
         type     = instantiate(binding_body(type), local);
         new_type = ctx.whnf(type);
@@ -1056,6 +1080,40 @@ name get_dep_cases_on(environment const & env, name const & n) {
         return name(n, "cases_on");
 }
 
+static char const * g_aux_meta_rec_prefix = "_meta_aux";
+
+name mk_aux_meta_rec_name(name const & n) {
+    return name(n, g_aux_meta_rec_prefix);
+}
+
+optional<name> is_aux_meta_rec_name(name const & n) {
+    if (!n.is_atomic() && n.is_string() && strcmp(n.get_string(), g_aux_meta_rec_prefix) == 0) {
+        return optional<name>(n.get_prefix());
+    } else {
+        return optional<name>();
+    }
+}
+
+optional<name> name_lit_to_name(expr const & name_lit) {
+    if (is_constant(name_lit, get_name_anonymous_name()))
+        return optional<name>(name());
+    if (is_app_of(name_lit, get_name_mk_string_name(), 2)) {
+        if (auto str = to_string(app_arg(app_fn(name_lit))))
+        if (auto p   = name_lit_to_name(app_arg(name_lit)))
+            return optional<name>(name(*p, str->c_str()));
+    }
+    return optional<name>();
+}
+
+static expr * g_tactic_unit = nullptr;
+
+expr mk_tactic_unit() {
+    return *g_tactic_unit;
+}
+
+static std::string * g_version_string = nullptr;
+std::string const & get_version_string() { return *g_version_string; }
+
 void initialize_library_util() {
     g_true           = new expr(mk_constant(get_true_name()));
     g_true_intro     = new expr(mk_constant(get_true_intro_name()));
@@ -1063,13 +1121,31 @@ void initialize_library_util() {
     g_and_intro      = new expr(mk_constant(get_and_intro_name()));
     g_and_elim_left  = new expr(mk_constant(get_and_elim_left_name()));
     g_and_elim_right = new expr(mk_constant(get_and_elim_right_name()));
+    g_tactic_unit    = new expr(mk_app(mk_constant(get_tactic_name(), {mk_level_zero()}), mk_constant(get_unit_name())));
     initialize_nat();
     initialize_int();
     initialize_char();
     initialize_bool();
+
+    sstream out;
+
+    out << LEAN_VERSION_MAJOR << "."
+        << LEAN_VERSION_MINOR << "." << LEAN_VERSION_PATCH;
+    if (std::strlen(LEAN_SPECIAL_VERSION_DESC) > 0) {
+        out << ", " << LEAN_SPECIAL_VERSION_DESC;
+    }
+    if (std::strcmp(LEAN_GITHASH, "GITDIR-NOTFOUND") == 0) {
+        if (std::strcmp(LEAN_PACKAGE_VERSION, "NOT-FOUND") != 0) {
+            out << ", package " << LEAN_PACKAGE_VERSION;
+        }
+    } else {
+        out << ", commit " << std::string(LEAN_GITHASH).substr(0, 12);
+    }
+    g_version_string = new std::string(out.str());
 }
 
 void finalize_library_util() {
+    delete g_version_string;
     finalize_bool();
     finalize_int();
     finalize_nat();
@@ -1080,5 +1156,6 @@ void finalize_library_util() {
     delete g_and_intro;
     delete g_and_elim_left;
     delete g_and_elim_right;
+    delete g_tactic_unit;
 }
 }

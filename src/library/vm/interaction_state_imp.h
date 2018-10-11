@@ -12,6 +12,7 @@ Authors: Leonardo de Moura, Sebastian Ullrich
 #include "library/profiling.h"
 #include "library/constants.h"
 #include "library/message_builder.h"
+#include "library/time_task.h"
 #include "library/vm/interaction_state.h"
 #include "library/vm/vm_environment.h"
 #include "library/vm/vm_exceptional.h"
@@ -25,6 +26,7 @@ Authors: Leonardo de Moura, Sebastian Ullrich
 #include "library/vm/vm_expr.h"
 #include "library/vm/vm_list.h"
 #include "library/vm/vm_option.h"
+#include "library/vm/vm_pos_info.h"
 #include "library/compiler/vm_compiler.h"
 
 namespace lean {
@@ -78,7 +80,7 @@ bool interaction_monad<State>::is_silent_exception(vm_obj const & ex) {
 }
 
 template<typename State>
-vm_obj interaction_monad<State>::mk_result(vm_obj const & a, vm_obj const & s) {
+vm_obj interaction_monad<State>::mk_success(vm_obj const & a, vm_obj const & s) {
     lean_assert(is_state(s));
     return mk_vm_constructor(0, a, s);
 }
@@ -89,18 +91,36 @@ bool interaction_monad<State>::is_result_exception(vm_obj const & r) {
 }
 
 template<typename State>
+vm_obj interaction_monad<State>::get_exception_message(vm_obj const & r) {
+    lean_assert(is_result_exception(r));
+    return cfield(r, 0);
+}
+
+template<typename State>
+vm_obj interaction_monad<State>::get_exception_pos(vm_obj const & r) {
+    lean_assert(is_result_exception(r));
+    return cfield(r, 1);
+}
+
+template<typename State>
+vm_obj interaction_monad<State>::get_exception_state(vm_obj const & r) {
+    lean_assert(is_result_exception(r));
+    return cfield(r, 2);
+}
+
+template<typename State>
 bool interaction_monad<State>::is_result_success(vm_obj const & r) {
     return is_constructor(r) && cidx(r) == 0;
 }
 
 template<typename State>
-vm_obj interaction_monad<State>::get_result_value(vm_obj const & r) {
+vm_obj interaction_monad<State>::get_success_value(vm_obj const & r) {
     lean_assert(is_result_success(r));
     return cfield(r, 0);
 }
 
 template<typename State>
-vm_obj interaction_monad<State>::get_result_state(vm_obj const & r) {
+vm_obj interaction_monad<State>::get_success_state(vm_obj const & r) {
     lean_assert(is_result_success(r));
     return cfield(r, 1);
 }
@@ -128,6 +148,12 @@ vm_obj interaction_monad<State>::mk_silent_exception(State const & s) {
 template<typename State>
 vm_obj interaction_monad<State>::mk_exception(vm_obj const & fn, vm_obj const & pos, State const & s) {
     return mk_vm_constructor(1, mk_vm_some(fn), pos, to_obj(s));
+}
+
+template<typename State>
+vm_obj interaction_monad<State>::update_exception_state(vm_obj const & ex, State const & s) {
+    lean_assert(is_result_exception(ex));
+    return mk_exception(get_exception_message(ex), get_exception_pos(ex), s);
 }
 
 template<typename State>
@@ -179,20 +205,20 @@ void interaction_monad<State>::report_exception(vm_state & S, vm_obj const & r) 
 template<typename State>
 auto interaction_monad<State>::is_success(vm_obj const & r) -> optional<State> {
     if (is_result_success(r))
-        return some(to_state(cfield(r, 1)));
+        return some(to_state(get_success_state(r)));
     return {};
 }
 
 template<typename State>
 auto interaction_monad<State>::is_exception(vm_state & S, vm_obj const & ex) -> optional<exception_info> {
-    if (is_result_exception(ex) && !is_none(cfield(ex, 0))) {
-        vm_obj fmt = S.invoke(get_some_value(cfield(ex, 0)), mk_vm_unit());
+    if (is_result_exception(ex) && !is_none(get_exception_message(ex))) {
+        vm_obj fmt = S.invoke(get_some_value(get_exception_message(ex)), mk_vm_unit());
         optional<pos_info> p;
-        if (!is_none(cfield(ex, 1))) {
-            auto vm_p = get_some_value(cfield(ex, 1));
-            p = some(mk_pair(to_unsigned(cfield(vm_p, 0)), to_unsigned(cfield(vm_p, 1))));
+        if (!is_none(get_exception_pos(ex))) {
+            auto vm_p = get_some_value(get_exception_pos(ex));
+            p = some(to_pos_info(vm_p));
         }
-        return optional<exception_info>(to_format(fmt), p, to_state(cfield(ex, 2)));
+        return optional<exception_info>(to_format(fmt), p, to_state(get_exception_state(ex)));
     } else {
         return {};
     }
@@ -222,7 +248,16 @@ environment interaction_monad<State>::evaluator::compile(name const & interactio
     }
     try {
         bool optimize_bytecode = false;
-        return vm_compile(new_env, new_env.get(interaction_name), optimize_bytecode);
+        if (provider) {
+            auto out = message_builder(environment(), get_global_ios(),
+                                       get_pos_info_provider()->get_file_name(),
+                                       get_pos_info_provider()->get_pos_info_or_some(interaction),
+                                       INFORMATION);
+            time_task _("elaboration: tactic compilation", out, m_opts);
+            return vm_compile(new_env, new_env.get(interaction_name), optimize_bytecode);
+        } else {
+            return vm_compile(new_env, new_env.get(interaction_name), optimize_bytecode);
+        }
     } catch (exception & ex) {
         throw formatted_exception(some(interaction), format(ex.what()));
     }
@@ -239,8 +274,11 @@ vm_obj interaction_monad<State>::evaluator::invoke(vm_state & S, name const & in
 }
 
 template<typename State>
-interaction_monad<State>::evaluator::evaluator(type_context & ctx, options const & opts):
+interaction_monad<State>::evaluator::evaluator(type_context_old & ctx, options const & opts, bool allow_profiler):
     m_ctx(ctx), m_opts(opts) {
+    if (!allow_profiler)
+        // do not bother to invoke the profiler for most trivial calls into Lean
+        m_opts = m_opts.update("profiler", false);
 }
 
 template<typename State>
@@ -260,7 +298,7 @@ vm_obj interaction_monad<State>::evaluator::operator()(expr const & interaction,
                                    get_pos_info_provider()->get_pos_info_or_some(interaction),
                                    INFORMATION);
         out.set_caption("tactic profile data");
-        if (prof.get_snapshots().display("tactic", m_opts, out.get_text_stream().get_stream()))
+        if (prof.get_snapshots().display("elaboration: tactic", m_opts, out.get_text_stream().get_stream()))
             out.report();
     }
 

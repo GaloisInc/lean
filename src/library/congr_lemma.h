@@ -5,9 +5,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Leonardo de Moura
 */
 #pragma once
-#include "library/type_context.h"
+#include "kernel/expr.h"
 
 namespace lean {
+class type_context_old;
+
 enum class congr_arg_kind {
     /* It is a parameter for the congruence lemma, the parameter occurs in the left and right hand sides. */
     Fixed,
@@ -38,29 +40,18 @@ public:
     bool all_eq_kind() const;
 };
 
-optional<congr_lemma> mk_congr_simp(type_context & ctx, expr const & fn);
-optional<congr_lemma> mk_congr_simp(type_context & ctx, expr const & fn, unsigned nargs);
+optional<congr_lemma> mk_congr_simp(type_context_old & ctx, expr const & fn);
+optional<congr_lemma> mk_congr_simp(type_context_old & ctx, expr const & fn, unsigned nargs);
 /* Create a specialized theorem using (a prefix of) the arguments of the given application. */
-optional<congr_lemma> mk_specialized_congr_simp(type_context & ctx, expr const & a);
+optional<congr_lemma> mk_specialized_congr_simp(type_context_old & ctx, expr const & a);
 
-optional<congr_lemma> mk_congr(type_context & ctx, expr const & fn);
-optional<congr_lemma> mk_congr(type_context & ctx, expr const & fn, unsigned nargs);
+optional<congr_lemma> mk_congr(type_context_old & ctx, expr const & fn);
+optional<congr_lemma> mk_congr(type_context_old & ctx, expr const & fn, unsigned nargs);
 /* Create a specialized theorem using (a prefix of) the arguments of the given application. */
-optional<congr_lemma> mk_specialized_congr(type_context & ctx, expr const & a);
+optional<congr_lemma> mk_specialized_congr(type_context_old & ctx, expr const & a);
 
-optional<congr_lemma> mk_hcongr(type_context & ctx, expr const & fn);
-optional<congr_lemma> mk_hcongr(type_context & ctx, expr const & fn, unsigned nargs);
-
-/** \brief If R is an equivalence relation, construct the congruence lemma
-
-    R a1 a2 -> R b1 b2 -> (R a1 b1) <-> (R a2 b2) */
-optional<congr_lemma> mk_rel_iff_congr(type_context & ctx, expr const & R);
-
-/** \brief Similar to previous one.
-    It returns none if propext is not available.
-
-    R a1 a2 -> R b1 b2 -> (R a1 b1) = (R a2 b2) */
-optional<congr_lemma> mk_rel_eq_congr(type_context & ctx, expr const & R);
+optional<congr_lemma> mk_hcongr(type_context_old & ctx, expr const & fn);
+optional<congr_lemma> mk_hcongr(type_context_old & ctx, expr const & fn, unsigned nargs);
 
 void initialize_congr_lemma();
 void finalize_congr_lemma();

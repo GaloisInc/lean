@@ -61,7 +61,7 @@ protected meta def failure {α} : lazy_tactic α :=
 λ s, nil
 
 meta instance : monad lazy_tactic :=
-unsafe_monad_from_pure_bind @lazy_tactic.return @lazy_tactic.bind
+monad_from_pure_bind @lazy_tactic.return @lazy_tactic.bind
 
 meta instance : alternative lazy_tactic :=
 { lazy_tactic.monad with
@@ -71,7 +71,7 @@ meta instance : alternative lazy_tactic :=
 meta def choose {α} (xs : list α) : lazy_tactic α :=
 λ s, of_list $ xs^.map (λ a, (a, s))
 
-meta def run {α} (t : lazy_tactic α) : tactic α :=
+protected meta def run {α} (t : lazy_tactic α) : tactic α :=
 λ s, match t s with
 | nil                := tactic.failed s
 | cons (a, new_s) ss := result.success a new_s
@@ -81,7 +81,7 @@ open tactic
 
 private meta def try_constructors : list name → lazy_tactic unit
 | []      := failure
-| (c::cs) := (mk_const c >>= apply : tactic unit) <|> try_constructors cs
+| (c::cs) := (mk_const c >>= apply >> skip : tactic unit) <|> try_constructors cs
 
 /- Backtracking version of constructor -/
 meta def constructor : lazy_tactic unit :=
@@ -94,7 +94,7 @@ end lazy_tactic
 open lazy_tactic
 
 example (p q : Prop) : q → p ∨ q :=
-by run $ do
+by lazy_tactic.run $ do
  tactic.intros,
  constructor,
  tactic.trace_state,

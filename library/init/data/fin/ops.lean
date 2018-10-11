@@ -52,12 +52,6 @@ lt_of_le_of_lt (nat.div_le_self a b) h
 protected def div : fin n → fin n → fin n
 | ⟨a, h⟩ ⟨b, _⟩ := ⟨a / b, divlt h⟩
 
-protected def lt : fin n → fin n → Prop
-| ⟨a, _⟩ ⟨b, _⟩ := a < b
-
-protected def le : fin n → fin n → Prop
-| ⟨a, _⟩ ⟨b, _⟩ := a ≤ b
-
 instance : has_zero (fin (succ n)) := ⟨⟨0, succ_pos n⟩⟩
 instance : has_one (fin (succ n))  := ⟨of_nat 1⟩
 instance : has_add (fin n)         := ⟨fin.add⟩
@@ -65,14 +59,6 @@ instance : has_sub (fin n)         := ⟨fin.sub⟩
 instance : has_mul (fin n)         := ⟨fin.mul⟩
 instance : has_mod (fin n)         := ⟨fin.mod⟩
 instance : has_div (fin n)         := ⟨fin.div⟩
-instance : has_lt (fin n)          := ⟨fin.lt⟩
-instance : has_le (fin n)          := ⟨fin.le⟩
-
-instance decidable_lt : ∀ (a b : fin n), decidable (a < b)
-| ⟨a, _⟩ ⟨b, _⟩ := by apply nat.decidable_lt
-
-instance decidable_le : ∀ (a b : fin n), decidable (a ≤ b)
-| ⟨a, _⟩ ⟨b, _⟩ := by apply nat.decidable_le
 
 lemma of_nat_zero : @of_nat n 0 = 0 := rfl
 
@@ -112,7 +98,7 @@ def pred {n : nat} : ∀ i : fin (succ n), i ≠ 0 → fin n
     have this : a ≠ 0,
     { have aux₁ := vne_of_ne h₂,
       dsimp at aux₁, rw val_zero at aux₁, exact aux₁ },
-    exact nat.pred_lt_pred this (nat.succ_ne_zero n) h₁
+    exact nat.pred_lt_pred this h₁
   end⟩
 
 end fin

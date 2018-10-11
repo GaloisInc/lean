@@ -15,6 +15,7 @@ Author: Leonardo de Moura
 #include "library/fingerprint.h"
 #include "library/trace.h"
 #include "library/quote.h"
+#include "library/constants.h"
 // TODO(Leo): move inline attribute declaration to library
 #include "library/compiler/inliner.h"
 namespace lean {
@@ -61,6 +62,18 @@ struct noncomputable_modification : public modification {
     }
 };
 
+// TODO(Leo): implement better support for extending this set of builtin constants
+static bool is_builtin_extra(name const & n) {
+    return
+        n == get_io_core_name() ||
+        n == get_monad_io_impl_name() ||
+        n == get_monad_io_terminal_impl_name() ||
+        n == get_monad_io_file_system_impl_name() ||
+        n == get_monad_io_environment_impl_name() ||
+        n == get_monad_io_process_impl_name() ||
+        n == get_monad_io_random_impl_name();
+}
+
 static bool is_noncomputable(type_checker & tc, noncomputable_ext const & ext, name const & n) {
     environment const & env = tc.env();
     if (ext.m_noncomputable.contains(n))
@@ -71,7 +84,7 @@ static bool is_noncomputable(type_checker & tc, noncomputable_ext const & ext, n
     } else if (d.is_axiom() && !tc.is_prop(d.get_type())) {
         return true;
     } else if (d.is_constant_assumption()) {
-        return !env.is_builtin(d.get_name()) && !tc.is_prop(d.get_type());
+        return !env.is_builtin(d.get_name()) && !tc.is_prop(d.get_type()) && !is_builtin_extra(d.get_name());
     } else {
         return false;
     }
@@ -119,7 +132,13 @@ struct get_noncomputable_reason_fn {
             return false;
         m_cache.insert(e);
         expr type = m_tc.whnf(m_tc.infer(e));
-        return !m_tc.is_prop(type) && !is_sort(type);
+        if (m_tc.is_prop(type) || is_sort(type))
+            return false;
+        while (is_pi(type)) {
+            expr l = mk_local(m_tc.next_name(), binding_name(type), binding_domain(type), binding_info(type));
+            type = m_tc.whnf(instantiate(binding_body(type), l));
+        }
+        return !is_sort(type);
     }
 
     void visit_macro(expr const & e) {
@@ -153,7 +172,7 @@ struct get_noncomputable_reason_fn {
             expr e = _e;
             while (is_lambda(e) || is_pi(e)) {
                 expr d = instantiate_rev(binding_domain(e), ls.size(), ls.data());
-                expr l = mk_local(mk_fresh_name(), binding_name(e), d, binding_info(e));
+                expr l = mk_local(m_tc.next_name(), binding_name(e), d, binding_info(e));
                 ls.push_back(l);
                 e = binding_body(e);
             }

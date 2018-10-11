@@ -1,7 +1,7 @@
 import system.io
 open io
 section
-open nat_map
+open native.nat_map
 
 #eval size (insert (insert (mk nat) 10 20) 10 21)
 
@@ -23,7 +23,7 @@ meta definition m2 := of_list [((1:nat), "one"), (2, "two"), (3, "three")]
 #eval find m2 3
 
 section
-variable [io.interface]
+
 #eval do pp m2, put_str "\n"
 end
 #eval m2
@@ -31,7 +31,7 @@ end
 end
 
 section
-open rb_map
+open native.rb_map
 -- Mapping from (nat × nat) → nat
 meta definition m3 := insert (insert (mk (nat × nat) nat) (1, 2) 3) (2, 2) 4
 
@@ -39,6 +39,6 @@ meta definition m3 := insert (insert (mk (nat × nat) nat) (1, 2) 3) (2, 2) 4
 #eval find m3 (2, 1)
 #eval find m3 (2, 2)
 
-variable [io.interface]
+
 #eval pp m3
 end

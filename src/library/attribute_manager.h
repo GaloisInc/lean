@@ -126,7 +126,7 @@ public:
     typed_attribute(name const & id, char const * descr, after_set_proc after_set = {}, before_unset_proc before_unset = {}) :
             attribute(id, descr, after_set, before_unset) {}
 
-    virtual attr_data_ptr parse_data(abstract_parser & p) const final override {
+    virtual attr_data_ptr parse_data(abstract_parser & p) const override {
         auto data = new Data;
         data->parse(p);
         return attr_data_ptr(data);
@@ -265,9 +265,11 @@ class user_attribute_ext {
 public:
     virtual ~user_attribute_ext() {}
     virtual name_map<attribute_ptr> get_attributes(environment const & env);
-    virtual void write_entry(serializer &, attr_data const &) {}
+    virtual void write_entry(serializer &, attr_data const &) {
+        lean_unreachable();
+    }
     virtual attr_data_ptr read_entry(deserializer &) {
-        return get_default_attr_data();
+        lean_unreachable();
     }
 };
 

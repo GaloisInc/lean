@@ -11,7 +11,10 @@ Author: Leonardo de Moura
 #include "kernel/inductive/inductive.h"
 #include "kernel/scope_pos_info_provider.h"
 #include "kernel/free_vars.h"
+#include "kernel/type_checker.h"
 #include "library/util.h"
+#include "library/module.h"
+#include "library/aliases.h"
 #include "library/trace.h"
 #include "library/app_builder.h"
 #include "library/private.h"
@@ -25,11 +28,14 @@ Author: Leonardo de Moura
 #include "library/replace_visitor.h"
 #include "library/aux_definition.h"
 #include "library/comp_val.h"
+#include "library/unfold_macros.h"
+#include "library/compiler/rec_fn_macro.h"
 #include "library/compiler/vm_compiler.h"
 #include "library/tactic/eqn_lemmas.h"
 #include "library/inductive_compiler/ginductive.h"
 #include "library/equations_compiler/equations.h"
 #include "library/equations_compiler/util.h"
+#include "library/equations_compiler/wf_rec.h"
 
 #ifndef LEAN_DEFAULT_EQN_COMPILER_LEMMAS
 #define LEAN_DEFAULT_EQN_COMPILER_LEMMAS true
@@ -47,7 +53,7 @@ static bool get_eqn_compiler_lemmas(options const & o) {
     return o.get_bool(*g_eqn_compiler_lemmas, LEAN_DEFAULT_EQN_COMPILER_LEMMAS);
 }
 
-static bool get_eqn_compiler_zeta(options const & o) {
+bool get_eqn_compiler_zeta(options const & o) {
     return o.get_bool(*g_eqn_compiler_zeta, LEAN_DEFAULT_EQN_COMPILER_ZETA);
 }
 
@@ -77,7 +83,7 @@ static expr consume_fn_prefix(expr eq, buffer<expr> const & fns) {
     return instantiate_rev(eq, fns);
 }
 
-unpack_eqns::unpack_eqns(type_context & ctx, expr const & e):
+unpack_eqns::unpack_eqns(type_context_old & ctx, expr const & e):
     m_locals(ctx) {
     lean_assert(is_equations(e));
     m_src = e;
@@ -122,7 +128,7 @@ unpack_eqns::unpack_eqns(type_context & ctx, expr const & e):
             }
         } else {
             /* noequation, guess arity using type of function */
-            type_context::tmp_locals locals(ctx);
+            type_context_old::tmp_locals locals(ctx);
             expr type = ctx.relaxed_whnf(ctx.infer(m_fns[fidx]));
             unsigned arity = 0;
             while (is_pi(type)) {
@@ -155,7 +161,7 @@ expr unpack_eqns::repack() {
     return update_equations(m_src, new_eqs);
 }
 
-unpack_eqn::unpack_eqn(type_context & ctx, expr const & eqn):
+unpack_eqn::unpack_eqn(type_context_old & ctx, expr const & eqn):
     m_src(eqn), m_locals(ctx) {
     expr it = eqn;
     while (is_lambda(it)) {
@@ -185,7 +191,7 @@ expr unpack_eqn::repack() {
     return copy_tag(m_src, m_locals.ctx().mk_lambda(m_vars, new_eq));
 }
 
-bool is_recursive_eqns(type_context & ctx, expr const & e) {
+bool is_recursive_eqns(type_context_old & ctx, expr const & e) {
     unpack_eqns ues(ctx, e);
     for (unsigned fidx = 0; fidx < ues.get_num_fns(); fidx++) {
         buffer<expr> const & eqns = ues.get_eqns_of(fidx);
@@ -241,8 +247,8 @@ list<expr> erase_inaccessible_annotations(list<expr> const & es) {
 
 local_context erase_inaccessible_annotations(local_context const & lctx) {
     local_context r;
-    r.m_next_idx             = lctx.m_next_idx;
-    r.m_instance_fingerprint = lctx.m_instance_fingerprint;
+    r.m_next_idx        = lctx.m_next_idx;
+    r.m_local_instances = lctx.m_local_instances;
     lctx.m_idx2local_decl.for_each([&](unsigned, local_decl const & d) {
             expr new_type = erase_inaccessible_annotations(d.get_type());
             optional<expr> new_value;
@@ -256,14 +262,6 @@ local_context erase_inaccessible_annotations(local_context const & lctx) {
     return r;
 }
 
-static pair<environment, name> mk_def_name(environment const & env, bool is_private, name const & c) {
-    if (is_private) {
-        return mk_private_name(env, c);
-    } else {
-        return mk_pair(env, c);
-    }
-}
-
 static void throw_mk_aux_definition_error(local_context const & lctx, name const & c, expr const & type, expr const & value, exception & ex) {
     sstream strm;
     strm << "equation compiler failed to create auxiliary declaration '" << c << "'";
@@ -273,8 +271,21 @@ static void throw_mk_aux_definition_error(local_context const & lctx, name const
     throw nested_exception(strm, ex);
 }
 
+void compile_aux_definition(environment & env, equations_header const & header, name const & user_name, name const & actual_name) {
+    if (header.m_gen_code) {
+        try {
+            env = vm_compile(env, env.get(actual_name));
+        } catch (exception & ex) {
+            if (!header.m_prev_errors) {
+                throw nested_exception(sstream() << "equation compiler failed to generate bytecode for "
+                                       << "auxiliary declaration '" << user_name << "'", ex);
+            }
+        }
+    }
+}
+
 pair<environment, expr> mk_aux_definition(environment const & env, options const & opts, metavar_context const & mctx, local_context const & lctx,
-                                          equations_header const & header, name const & c, expr const & type, expr const & value) {
+                                          equations_header const & header, name const & c, name const & actual_c, expr const & type, expr const & value) {
     lean_trace("eqn_compiler", tout() << "declaring auxiliary definition\n" << c << " : " << type << "\n";);
     environment new_env = env;
     expr new_type       = type;
@@ -284,8 +295,11 @@ pair<environment, expr> mk_aux_definition(environment const & env, options const
         new_type  = zeta_expand(lctx, new_type);
         new_value = zeta_expand(lctx, new_value);
     }
-    name new_c;
-    std::tie(new_env, new_c) = mk_def_name(env, header.m_is_private, c);
+    name new_c          = actual_c;
+    if (header.m_is_private) {
+        new_env = register_private_name(env, c, actual_c);
+        new_env = add_expr_alias(new_env, c, actual_c);
+    }
     expr r;
     try {
         std::tie(new_env, r) = header.m_is_lemma ?
@@ -294,21 +308,14 @@ pair<environment, expr> mk_aux_definition(environment const & env, options const
     } catch (exception & ex) {
         throw_mk_aux_definition_error(lctx, c, new_type, new_value, ex);
     }
-    try {
-        new_env = vm_compile(new_env, new_env.get(new_c));
-    } catch (exception & ex) {
-        if (!header.m_prev_errors) {
-            throw nested_exception(sstream() << "equation compiler failed to generate bytecode for "
-                                   << "auxiliary declaration '" << c << "'", ex);
-        }
-    }
+    compile_aux_definition(new_env, header, c, new_c);
     return mk_pair(new_env, r);
 }
 
 static pair<environment, expr> abstract_rhs_nested_proofs(environment const & env, metavar_context const & mctx, local_context const & lctx,
                                                           name const & base_name, expr const & e) {
-    type_context ctx(env, options(), mctx, lctx, transparency_mode::Semireducible);
-    type_context::tmp_locals locals(ctx);
+    type_context_old ctx(env, options(), mctx, lctx, transparency_mode::Semireducible);
+    type_context_old::tmp_locals locals(ctx);
     expr t = e;
     while (is_pi(t)) {
         expr d = instantiate_rev(binding_domain(t), locals.size(), locals.data());
@@ -330,10 +337,12 @@ static pair<environment, expr> abstract_rhs_nested_proofs(environment const & en
 }
 
 static environment add_equation_lemma(environment const & env, options const & opts, metavar_context const & mctx, local_context const & lctx,
-                                      bool is_private, name const & f_name, name const & eqn_name, expr const & type, expr const & value) {
+                                      bool is_private, name const & f_actual_name, name const & eqn_name, name const & eqn_actual_name, expr const & type, expr const & value) {
     environment new_env = env;
-    name new_eqn_name;
-    std::tie(new_env, new_eqn_name) = mk_def_name(env, is_private, eqn_name);
+    name new_eqn_name   = eqn_actual_name;
+    if (is_private) {
+        new_env = register_private_name(env, eqn_name, eqn_actual_name);
+    }
     expr r;
     expr new_type  = erase_inaccessible_annotations(type);
     expr new_value = value;
@@ -346,10 +355,10 @@ static environment add_equation_lemma(environment const & env, options const & o
         /* We do not abstract for private equation lemmas because:
            1- It is not clear how to name them.
            2- Their scope is limited to the current file. */
-        std::tie(new_env, new_type) = abstract_rhs_nested_proofs(new_env, mctx, lctx, f_name, new_type);
+        std::tie(new_env, new_type) = abstract_rhs_nested_proofs(new_env, mctx, lctx, f_actual_name, new_type);
     }
     try {
-        std::tie(new_env, r) = mk_aux_definition(new_env, mctx, lctx, new_eqn_name, new_type, new_value);
+        std::tie(new_env, r) = mk_aux_lemma(new_env, mctx, lctx, new_eqn_name, new_type, new_value);
         if (is_rfl_lemma(new_type, new_value))
             new_env = mark_rfl_lemma(new_env, new_eqn_name);
         new_env = add_eqn_lemma(new_env, new_eqn_name);
@@ -359,11 +368,10 @@ static environment add_equation_lemma(environment const & env, options const & o
     return new_env;
 }
 
-static expr whnf_ite(type_context & ctx, expr const & e) {
-    // tout() << "whnf_ite >> " << e << "\n";
+static expr whnf_ite(type_context_old & ctx, expr const & e) {
+    /* We use id_rhs as a "marker" to decide when to stop the whnf computation. */
     return ctx.whnf_head_pred(e, [&](expr const & e) {
             expr const & fn = get_app_fn(e);
-            // tout() << ">> pred: " << e << "\n";
             return !is_constant(fn, get_ite_name()) && !is_constant(fn, get_id_rhs_name());
         });
 }
@@ -375,8 +383,8 @@ static bool is_ite_eq(expr const & lhs, buffer<expr> & ite_args) {
     return is_constant(fn, get_ite_name()) && ite_args.size() == 5 && is_eq(ite_args[0]);
 }
 
-static bool conservative_is_def_eq(type_context & ctx, expr const & a, expr const & b) {
-    type_context::transparency_scope scope(ctx, transparency_mode::Reducible);
+static bool conservative_is_def_eq(type_context_old & ctx, expr const & a, expr const & b) {
+    type_context_old::transparency_scope scope(ctx, transparency_mode::Reducible);
     return ctx.is_def_eq(a, b);
 }
 
@@ -401,7 +409,7 @@ static lbool compare_values(expr const & a, expr const & b) {
     return l_undef;
 }
 
-static bool quick_is_def_eq_when_values(type_context & ctx, expr const & a, expr const & b) {
+static bool quick_is_def_eq_when_values(type_context_old & ctx, expr const & a, expr const & b) {
     if (!is_local(a) && !is_local(b)) {
         if (compare_values(a, b) == l_true)
             return true;
@@ -410,7 +418,7 @@ static bool quick_is_def_eq_when_values(type_context & ctx, expr const & a, expr
 }
 
 /* Try to find (H : not (c_lhs = c_rhs)) at Hs */
-static optional<expr> find_if_neg_hypothesis(type_context & ctx, expr const & c_lhs, expr const & c_rhs,
+static optional<expr> find_if_neg_hypothesis(type_context_old & ctx, expr const & c_lhs, expr const & c_rhs,
                                              buffer<expr> const & Hs) {
     for (expr const & H : Hs) {
         expr H_type = ctx.infer(H);
@@ -450,7 +458,7 @@ static optional<expr> find_if_neg_hypothesis(type_context & ctx, expr const & c_
      (eq.symm (g_f_eq a))
      (f_g_eq a)
 */
-static optional<expr_pair> prove_eq_rec_invertible_aux(type_context & ctx, expr const & e) {
+static optional<expr_pair> prove_eq_rec_invertible_aux(type_context_old & ctx, expr const & e) {
     buffer<expr> rec_args;
     expr rec_fn = get_app_args(e, rec_args);
     if (!is_constant(rec_fn, get_eq_rec_name()) || rec_args.size() != 6) return optional<expr_pair>();
@@ -494,7 +502,7 @@ static optional<expr_pair> prove_eq_rec_invertible_aux(type_context & ctx, expr 
     expr f_a_eq_f_a = mk_eq(ctx, f_a, f_a);
     /* (fun H : f a = f a, eq.refl (h a)) */
     expr pr_minor   = mk_lambda("_H", f_a_eq_f_a, refl_h_a);
-    type_context::tmp_locals aux_locals(ctx);
+    type_context_old::tmp_locals aux_locals(ctx);
     expr x          = aux_locals.push_local("_x", A);
     /* Remark: we cannot use mk_app(f, x) in the following line.
        Reason: f may have implicit arguments. So, app_fn(f_x) is not equal to f in general,
@@ -541,7 +549,7 @@ static optional<expr_pair> prove_eq_rec_invertible_aux(type_context & ctx, expr 
   We build an auxiliary proof for (F = h a) using prove_eq_rec_invertible_aux.
   Then, we use congr_fun to build the final proof if n > 0
 */
-static optional<expr_pair> prove_eq_rec_invertible(type_context & ctx, expr const & e) {
+static optional<expr_pair> prove_eq_rec_invertible(type_context_old & ctx, expr const & e) {
     buffer<expr> args;
     expr const & fn = get_app_args(e, args);
     if (args.size() == 6) {
@@ -574,7 +582,7 @@ static optional<expr_pair> prove_eq_rec_invertible(type_context & ctx, expr cons
     }
 }
 
-static expr prove_eqn_lemma_core(type_context & ctx, buffer<expr> const & Hs, expr const & lhs, expr const & rhs, bool root) {
+static expr prove_eqn_lemma_core(type_context_old & ctx, buffer<expr> const & Hs, expr const & lhs, expr const & rhs, bool root) {
     buffer<expr> ite_args;
     expr new_lhs = whnf_ite(ctx, lhs);
     if (is_ite_eq(new_lhs, ite_args)) {
@@ -616,22 +624,115 @@ static expr prove_eqn_lemma_core(type_context & ctx, buffer<expr> const & Hs, ex
         return mk_eq_trans(ctx, H1, H2);
     }
 
-    expr lhs_body = lhs;
+    /* Check if lhs =?= rhs, and create a reflexivity proof if this is the case.
+
+       We have to be careful to avoid performace problems when checking this proof in the kernel.
+       We considered different options.
+
+       Option 1) (refl rhs) or (refl lhs)
+       It will perform poorly in one of the following examples:
+
+
+          | f x 0     := 1
+          | f x (y+1) := f complex_term y
+
+          | g 0     y    := 1
+          | g (x+1) y    := g x complex_term
+
+      If we use (refl rhs), we will generate the proofs
+
+         eq.refl (f complex_term y)
+         eq.refl (g x complex_term)
+
+      These proofs trigger the following definitionally equality tests:
+
+             f x     (y+1)  =?= f complex_term y
+             g (x+1) y      =?= g x complex_term
+
+      Since, we have f/g on both sides, the type checker will try
+      first to unify the arguments, and may timeout trying to solve
+
+               x  =?= complex_term
+               y  =?= complex_term
+
+      since it may take a long time to reduce `complex_term`.
+
+      We have a similar problem if we use (refl lhs)
+
+      Commit 7ebf16ca26da82b3d0e458dbcf32cda374ec785d tried to address this issue
+      by using Option 2).
+
+      Option 2) (refl (unfold_of lhs))
+      This option fixes the performance problem above, but it is still
+      inefficient for definitions that produce many equations.
+      For example, the following definition produces 121 equations.
+
+      ```
+        universes u
+
+        inductive node (α : Type u)
+        | leaf : node
+        | red_node : node → α → node → node
+        | black_node : node → α → node → node
+
+        namespace node
+        variable {α : Type u}
+
+        def balance : node α → α → node α → node α
+        | (red_node (red_node a x b) y c) k d := red_node (black_node a x b) y (black_node c k d)
+        | (red_node a x (red_node b y c)) k d := red_node (black_node a x b) y (black_node c k d)
+        | l k r                               := black_node l k r
+
+        end node
+      ```
+
+      In each equation we will have a big (unfold_of lhs) term. This increases the size of .olean
+      files, and introduces an overhead in the mk_aux_lemma procedure.
+
+      Option 3) (refl (id_delta lhs))
+      We are currently using this option.
+      This approach relies on the fact that the kernel type checker has special support for id_delta.
+      The kernel implements the following is_def_eq rules for id_delta.
+
+          1)   (id_delta t) =?= t
+          2)   t =?= (id_delta t)
+          3)   (id_delta t) =?= s  IF (unfold_of t) =?= s
+          4)   t =?= id_delta s    IF t =?= (unfold_of s)
+
+      We can view it as a "lazy" version of Option 2. The .olean file contains `id_delta t`
+      instead of the result of delta-reducing t. Similarly, no overhead is introduced to mk_aux_lemma
+      since the proof is quite small in this case.
+
+      Finally, note that this optimization is only use when root = true.
+      That is, it is not use if the equation compiler used if-then-else compilation trick for
+      pattern matching scalar values, and/or the pack/unpack auxiliary definitions introduced
+      for nested inductive datatype declarations.
+      The problem described in Option 1 does not happen in this case since we unfold the left-hand-side
+      while building the proof. However, the performance problem described in Option 2 may happen.
+    */
     if (root) {
+        /* Remark: type_context_old currently does not have support for id_delta.
+           So, we unfold lhs before invoking ctx.is_def_eq. */
+        expr lhs_body = lhs;
         if (auto b = unfold_term(ctx.env(), lhs))
             lhs_body = *b;
-    }
-
-    if (ctx.is_def_eq(lhs_body, rhs)) {
-        // tout() << "DONE\n";
-        return mk_eq_refl(ctx, lhs_body);
+        if (ctx.is_def_eq(lhs_body, rhs)) {
+            if (ctx.env().find(get_id_delta_name()))
+                return mk_eq_refl(ctx, mk_id_delta(ctx, lhs));
+            else
+                return mk_eq_refl(ctx, lhs);
+        }
+    } else {
+        if (ctx.is_def_eq(lhs, rhs))
+            return mk_eq_refl(ctx, lhs);
     }
 
     throw exception("equation compiler failed to prove equation lemma (workaround: "
                     "disable lemma generation using `set_option eqn_compiler.lemmas false`)");
 }
 
-static expr prove_eqn_lemma(type_context & ctx, buffer<expr> const & Hs, expr const & lhs, expr const & rhs) {
+static expr prove_eqn_lemma(type_context_old & ctx, buffer<expr> const & Hs, expr const & lhs, expr const & rhs) {
+    type_context_old::smart_unfolding_scope S(ctx, false);
     if (auto new_lhs = unfold_app(ctx.env(), lhs)) {
         buffer<expr> args;
         expr fn = get_app_args(*new_lhs, args);
@@ -701,26 +802,27 @@ static expr cleanup_equation_rhs(expr const & rhs) {
 }
 
 environment mk_equation_lemma(environment const & env, options const & opts, metavar_context const & mctx, local_context const & lctx,
-                              name const & f_name, unsigned eqn_idx, bool is_private,
+                              name const & f_name, name const & f_actual_name, unsigned eqn_idx, bool is_private,
                               buffer<expr> const & Hs, expr const & lhs, expr const & rhs) {
     if (!get_eqn_compiler_lemmas(opts)) return env;
-    type_context ctx(env, opts, mctx, lctx, transparency_mode::Semireducible);
-    expr proof    = prove_eqn_lemma(ctx, Hs, lhs, rhs);
-    expr new_rhs  = cleanup_equation_rhs(rhs);
-    expr type     = ctx.mk_pi(Hs, mk_eq(ctx, lhs, new_rhs));
-    name eqn_name = mk_equation_name(f_name, eqn_idx);
-    return add_equation_lemma(env, opts, mctx, lctx, is_private, f_name, eqn_name, type, proof);
+    type_context_old ctx(env, opts, mctx, lctx, transparency_mode::Semireducible);
+    expr proof        = prove_eqn_lemma(ctx, Hs, lhs, rhs);
+    expr new_rhs      = cleanup_equation_rhs(rhs);
+    expr type         = ctx.mk_pi(Hs, mk_eq(ctx, lhs, new_rhs));
+    name eqn_name     = mk_equation_name(f_name, eqn_idx);
+    name eqn_actual_name = mk_equation_name(f_actual_name, eqn_idx);
+    return add_equation_lemma(env, opts, mctx, lctx, is_private, f_actual_name, eqn_name, eqn_actual_name, type, proof);
 }
 
-environment mk_simple_equation_lemma_for(environment const & env, options const & opts, bool is_private, name const & c, unsigned arity) {
+environment mk_simple_equation_lemma_for(environment const & env, options const & opts, bool is_private, name const & c, name const & c_actual, unsigned arity) {
     if (!env.find(get_eq_name())) return env;
     if (!get_eqn_compiler_lemmas(opts)) return env;
-    declaration d = env.get(c);
-    type_context ctx(env, transparency_mode::All);
+    declaration d = env.get(c_actual);
+    type_context_old ctx(env, transparency_mode::All);
     expr type  = d.get_type();
     expr value = d.get_value();
-    expr lhs   = mk_constant(c, param_names_to_levels(d.get_univ_params()));
-    type_context::tmp_locals locals(ctx);
+    expr lhs   = mk_constant(c_actual, param_names_to_levels(d.get_univ_params()));
+    type_context_old::tmp_locals locals(ctx);
     for (unsigned i = 0; i < arity; i++) {
         type  = ctx.relaxed_whnf(type);
         value = ctx.relaxed_whnf(value);
@@ -731,10 +833,12 @@ environment mk_simple_equation_lemma_for(environment const & env, options const 
         type   = instantiate(binding_body(type), x);
         value  = instantiate(binding_body(value), x);
     }
-    name eqn_name  = mk_equation_name(c, 1);
-    expr eqn_type  = locals.mk_pi(mk_eq(ctx, lhs, value));
-    expr eqn_proof = locals.mk_lambda(mk_eq_refl(ctx, lhs));
-    return add_equation_lemma(env, opts, metavar_context(), ctx.lctx(), is_private, c, eqn_name, eqn_type, eqn_proof);
+    name eqn_name        = mk_equation_name(c, 1);
+    name eqn_actual_name = mk_equation_name(c_actual, 1);
+    expr eqn_type        = locals.mk_pi(mk_eq(ctx, lhs, value));
+    expr eqn_proof       = locals.mk_lambda(mk_eq_refl(ctx, lhs));
+    environment new_env  = add_equation_lemma(env, opts, metavar_context(), ctx.lctx(), is_private, c_actual, eqn_name, eqn_actual_name, eqn_type, eqn_proof);
+    return mark_has_simple_eqn_lemma(new_env, c_actual);
 }
 
 bool is_name_value(expr const & e) {
@@ -749,7 +853,7 @@ bool is_name_value(expr const & e) {
     return false;
 }
 
-bool is_nat_int_char_string_name_value(type_context & ctx, expr const & e) {
+bool is_nat_int_char_string_name_value(type_context_old & ctx, expr const & e) {
     if (is_char_value(ctx, e) || is_string_value(e) || is_name_value(e)) return true;
     if (is_signed_num(e)) {
         expr type = ctx.infer(e);
@@ -764,7 +868,7 @@ static bool is_inductive(environment const & env, expr const & e) {
 }
 
 /* Normalize until head is an inductive datatype */
-static expr whnf_inductive(type_context & ctx, expr const & e) {
+static expr whnf_inductive(type_context_old & ctx, expr const & e) {
     return ctx.whnf_head_pred(e, [&](expr const & e) {
             return !is_inductive(ctx.env(), get_app_fn(e));
         });
@@ -779,7 +883,7 @@ static void get_constructors_of(environment const & env, name const & n, buffer<
    where new_vars are fresh variables and are arguments of (c A ...)
    which have not been fixed by typing constraints. Moreover, fn is only invoked if
    the type of (c A ...) matches (I A idx). */
-void for_each_compatible_constructor(type_context & ctx, expr const & var,
+void for_each_compatible_constructor(type_context_old & ctx, expr const & var,
                                      std::function<void(expr const &, buffer<expr> &)> const & fn) {
     lean_assert(is_local(var));
     expr var_type = whnf_inductive(ctx, ctx.infer(var));
@@ -799,7 +903,7 @@ void for_each_compatible_constructor(type_context & ctx, expr const & var,
         expr c  = mk_app(mk_constant(c_name, I_ls), I_params);
         expr it = whnf_inductive(ctx, ctx.infer(c));
         {
-            type_context::tmp_mode_scope scope(ctx);
+            type_context_old::tmp_mode_scope scope(ctx);
             while (is_pi(it)) {
                 expr new_arg = ctx.mk_tmp_mvar(binding_domain(it));
                 c_vars.push_back(new_arg);
@@ -848,7 +952,7 @@ void for_each_compatible_constructor(type_context & ctx, expr const & var,
 
    \remark The set of variables in t is a subset of {x_1, ..., x_{i-1}} union {y_1, ..., y_k}
 */
-void update_telescope(type_context & ctx, buffer<expr> const & vars, expr const & var,
+void update_telescope(type_context_old & ctx, buffer<expr> const & vars, expr const & var,
                       expr const & t, buffer<expr> const & t_vars, buffer<expr> & new_vars,
                       buffer<expr> & from, buffer<expr> & to) {
     /* We are replacing `var` with `c` */
@@ -869,6 +973,99 @@ void update_telescope(type_context & ctx, buffer<expr> const & vars, expr const 
                 new_vars.push_back(new_curr);
             }
         }
+    }
+}
+
+/* Helper functor for mk_smart_unfolding_definition */
+struct replace_rec_fn_macro_fn : public replace_visitor {
+    name const & m_fn_aux_name;
+    expr const & m_new_fn;
+    unsigned     m_nargs_to_skip;
+    bool         m_found{false};
+
+    virtual expr visit_app(expr const & e) override {
+        buffer<expr> args;
+        expr const & fn = get_app_args(e, args);
+        if (is_rec_fn_macro(fn)) {
+            if (args.size() >= m_nargs_to_skip && get_rec_fn_name(fn) == m_fn_aux_name) {
+                m_found = true;
+                for (unsigned i = m_nargs_to_skip; i < args.size(); i++) {
+                    expr & arg   = args[i];
+                    arg          = visit(arg);
+                }
+                return mk_app(m_new_fn, args.size() - m_nargs_to_skip, args.data() + m_nargs_to_skip);
+            } else {
+                throw exception("failed to generate helper declaration for smart unfolding, unexpected occurrence of recursive application");
+            }
+        } else {
+            expr new_fn   = visit(fn);
+            bool modified = !is_eqp(fn, new_fn);
+            for (expr & arg : args) {
+                expr new_arg = visit(arg);
+                if (!is_eqp(new_arg, arg))
+                    modified = true;
+                arg = new_arg;
+            }
+            if (!modified)
+                return e;
+            else
+                return mk_app(new_fn, args);
+        }
+    }
+
+    replace_rec_fn_macro_fn(name const & fn_aux_name, expr const & new_fn, unsigned nargs_to_skip):
+        m_fn_aux_name(fn_aux_name),
+        m_new_fn(new_fn),
+        m_nargs_to_skip(nargs_to_skip) {
+    }
+};
+
+environment mk_smart_unfolding_definition(environment const & env, options const & o, name const & n) {
+    type_context_old ctx(env, o, metavar_context(), local_context());
+    declaration const & d = env.get(n);
+    expr val  = d.get_value();
+    levels ls = param_names_to_levels(d.get_univ_params());
+    type_context_old::tmp_locals locals(ctx);
+    while (is_lambda(val)) {
+        val = instantiate(binding_body(val), locals.push_local_from_binding(val));
+    }
+    expr const & fn      = get_app_fn(val);
+    buffer<expr> args;
+    get_app_rev_args(val, args);
+
+    if (!is_constant(fn) || const_name(fn) != name(n, "_main")) {
+        return env;
+    }
+
+    name const & fn_name = const_name(fn);
+
+    if (uses_well_founded_recursion(env, fn_name)) {
+        return env;
+    }
+
+    name meta_aux_fn_name = mk_aux_meta_rec_name(fn_name);
+
+    expr helper_value;
+    if (optional<declaration> aux_d = env.find(meta_aux_fn_name)) {
+        expr new_fn  = mk_app(mk_constant(n, ls), locals.size(), locals.data());
+        helper_value = instantiate_value_univ_params(*aux_d, const_levels(fn));
+        helper_value = apply_beta(helper_value, args.size(), args.data());
+        replace_rec_fn_macro_fn proc(meta_aux_fn_name, new_fn, args.size());
+        helper_value = proc(helper_value);
+        if (!proc.m_found)
+            throw exception("failed to generate helper declaration for smart unfolding, auxiliary meta declaration does not contain recursive application");
+    } else {
+        helper_value = instantiate_value_univ_params(env.get(fn_name), const_levels(fn));
+        helper_value = apply_beta(helper_value, args.size(), args.data());
+    }
+
+    helper_value = unfold_untrusted_macros(env, locals.mk_lambda(helper_value));
+    try {
+        declaration def = mk_definition(env, mk_smart_unfolding_name_for(n), d.get_univ_params(), d.get_type(), helper_value, true, true);
+        auto cdef       = check(env, def);
+        return module::add(env, cdef);
+    } catch (exception & ex) {
+        throw nested_exception("failed to generate helper declaration for smart unfolding, type error", ex);
     }
 }
 

@@ -55,8 +55,7 @@ example (k m n : ℕ) : test (succ k) (succ (succ n)) m = 3 :=
 begin
   revert m,
   induction n with n',
-  {intro, reflexivity},
-  {intro,
-   simp [test] {zeta := ff}, dsimp, simp [ih_1],
-   simp [nat.bit1_eq_succ_bit0, test]}
+  { intro, reflexivity},
+  { intro,
+    simp [test, n_ih] }
 end

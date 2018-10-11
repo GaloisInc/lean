@@ -4,19 +4,17 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Leonardo de Moura
 -/
 prelude
-import init.meta.tactic init.data.option_t
+import init.meta.tactic init.category.option
 import init.meta.mk_dec_eq_instance
 
 meta constant vm_obj : Type
 
+@[derive decidable_eq]
 inductive vm_obj_kind
 | simple | constructor | closure | native_closure | mpz
 | name | level | expr | declaration
 | environment | tactic_state | format
 | options | other
-
-instance vm_obj_kind_dec_eq : decidable_eq vm_obj_kind :=
-by tactic.mk_dec_eq_instance
 
 namespace vm_obj
 meta constant kind            : vm_obj → vm_obj_kind
@@ -77,9 +75,7 @@ meta constant vm_core.ret {α : Type} : α → vm_core α
 meta constant vm_core.bind {α β : Type} : vm_core α → (α → vm_core β) → vm_core β
 
 meta instance : monad vm_core :=
-{map := @vm_core.map, pure := @vm_core.ret, bind := @vm_core.bind,
- id_map := undefined, pure_bind := undefined, bind_assoc := undefined,
- bind_pure_comp_eq_map := undefined, bind_map_eq_seq := undefined}
+{ map := @vm_core.map, pure := @vm_core.ret, bind := @vm_core.bind }
 
 @[reducible] meta def vm (α : Type) : Type := option_t vm_core α
 

@@ -33,7 +33,7 @@ do lhs_type   ← infer_type lhs,
    gs         ← get_goals,
    set_goals [new_g],
    c,
-   repeat reflexivity,
+   try $ any_goals reflexivity,
    n          ← num_goals,
    when (n ≠ 0) (fail "convert tactic failed, there are unsolved goals"),
    set_goals gs,
@@ -107,7 +107,7 @@ do (r, lhs, rhs) ← target_lhs_rhs,
    return ()
 
 meta def funext : conv unit :=
-repeat $ do
+iterate $ do
   (r, lhs, rhs) ← target_lhs_rhs,
   guard (r = `eq),
   (expr.lam n _ _ _) ← return lhs,

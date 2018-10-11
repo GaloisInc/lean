@@ -1,13 +1,20 @@
 cmake_minimum_required(VERSION 2.8.7)
+if ((${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} GREATER 3.1) OR (${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} EQUAL 3.1))
+  cmake_policy(SET CMP0054 NEW)
+endif()
 project(LEAN CXX C)
 set(LEAN_VERSION_MAJOR 3)
-set(LEAN_VERSION_MINOR 2)
-set(LEAN_VERSION_PATCH 1)
+set(LEAN_VERSION_MINOR 4)
+set(LEAN_VERSION_PATCH 2)
 set(LEAN_VERSION_IS_RELEASE 0)  # This number is 1 in the release revision, and 0 otherwise.
-set(LEAN_VERSION_STRING "${LEAN_VERSION_MAJOR}.${LEAN_VERSION_MINOR}.${LEAN_VERSION_PATCH}" CACHE STRING "Lean version string")
+set(LEAN_SPECIAL_VERSION_DESC "" CACHE STRING "Additional version description like 'nightly-2018-03-11'")
+set(LEAN_VERSION_STRING "${LEAN_VERSION_MAJOR}.${LEAN_VERSION_MINOR}.${LEAN_VERSION_PATCH}")
+if (LEAN_SPECIAL_VERSION_DESC)
+  set(LEAN_VERSION_STRING "${LEAN_VERSION_STRING}-${LEAN_SPECIAL_VERSION_DESC}")
+endif()
 
-set(LEAN_EXTRA_LINKER_FLAGS "")
-set(LEAN_EXTRA_CXX_FLAGS "")
+set(LEAN_EXTRA_LINKER_FLAGS "" CACHE STRING "Additional flags used by the linker")
+set(LEAN_EXTRA_CXX_FLAGS "" CACHE STRING "Additional flags used by the C++ compiler")
 
 if (NOT CMAKE_BUILD_TYPE)
   message(STATUS "No build type selected, default to Release")
@@ -50,8 +57,8 @@ option(CUSTOM_ALLOCATORS   "CUSTOM_ALLOCATORS" ON)
 option(SAVE_SNAPSHOT       "SAVE_SNAPSHOT" ON)
 option(SAVE_INFO           "SAVE_INFO" ON)
 
-# emacs site-lisp dir
-set(EMACS_LISP_DIR        "share/emacs/site-lisp/lean" CACHE STRING "emacs site-lisp dir")
+option(CHECK_OLEAN_VERSION "Only load .olean files compiled with the current version of Lean" ON)
+
 # library dir
 set(LIBRARY_DIR           "lib/lean"                   CACHE STRING "library dir")
 set(LEAN_EXT_INCLUDE_DIR  "include/lean_ext"           CACHE STRING "include dir for building Lean extensions")
@@ -102,8 +109,10 @@ if (NOT("${SAVE_INFO}" MATCHES "ON"))
   set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_NO_INFO")
 endif()
 
-message(STATUS "Lean emacs-mode will be installed at "
-  "${CMAKE_INSTALL_PREFIX}/${EMACS_LISP_DIR}")
+if (NOT("${CHECK_OLEAN_VERSION}" MATCHES "ON"))
+  set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_IGNORE_OLEAN_VERSION")
+endif()
+
 message(STATUS "Lean library will be installed at "
   "${CMAKE_INSTALL_PREFIX}/${LIBRARY_DIR}")
 
@@ -133,13 +142,17 @@ configure_file("${LEAN_SOURCE_DIR}/CTestCustom.cmake.in"
 if((${CYGWIN} EQUAL "1") OR (${CMAKE_SYSTEM_NAME} MATCHES "Windows"))
   message(STATUS "Windows detected")
   set(LEAN_WIN_STACK_SIZE "104857600")
-  set(LEAN_EXTRA_LINKER_FLAGS "${LEAN_EXTRA_LINKER_FLAGS} -Wl,--stack,${LEAN_WIN_STACK_SIZE}")
+  if (MSVC)
+    set(LEAN_EXTRA_LINKER_FLAGS "${LEAN_EXTRA_LINKER_FLAGS} /STACK:${LEAN_WIN_STACK_SIZE}")
+  else()
+    set(LEAN_EXTRA_LINKER_FLAGS "${LEAN_EXTRA_LINKER_FLAGS} -Wl,--stack,${LEAN_WIN_STACK_SIZE}")
+    set(EXTRA_UTIL_LIBS ${EXTRA_UTIL_LIBS} -lpsapi)
+  endif()
   set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_WINDOWS -D LEAN_WIN_STACK_SIZE=${LEAN_WIN_STACK_SIZE}")
-  set(EXTRA_UTIL_LIBS ${EXTRA_UTIL_LIBS} -lpsapi)
 endif()
 
 if("${CYGWIN}" EQUAL "1")
-  set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_CYGWIN")
+  set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_CYGWIN -D _GNU_SOURCE")
 endif()
 
 if(JSON)
@@ -165,7 +178,7 @@ if(VM_UNCHECKED)
   set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_VM_UNCHECKED")
 endif()
 
-if(AUTO_THREAD_FINALIZATION)
+if(AUTO_THREAD_FINALIZATION AND NOT MSVC)
   set(LEAN_EXTRA_CXX_FLAGS "${LEAN_EXTRA_CXX_FLAGS} -D LEAN_AUTO_THREAD_FINALIZATION")
 endif()
 
@@ -181,18 +194,17 @@ endif()
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 # Initialize CXXFLAGS.
-set(CMAKE_CXX_FLAGS                "-Wall -Wextra -std=c++11 ${LEAN_EXTRA_CXX_FLAGS} -DLEAN_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
-set(CMAKE_CXX_FLAGS_DEBUG          "-g3 -DLEAN_DEBUG -DLEAN_TRACE")
-set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Os -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE        "-O3 -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g3 -DLEAN_DEBUG")
+set(CMAKE_CXX_FLAGS                "${LEAN_EXTRA_CXX_FLAGS} -DLEAN_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
+set(CMAKE_CXX_FLAGS_DEBUG          "-DLEAN_DEBUG -DLEAN_TRACE")
+set(CMAKE_CXX_FLAGS_MINSIZEREL     "-DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE        "-DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-DLEAN_DEBUG")
 set(CMAKE_CXX_FLAGS_GPROF          "-O2 -g -pg")
 
 # OSX .dmg generation (this is working in progress)
 set(CPACK_DMG_BACKGROUND_IMAGE "${LEAN_SOURCE_DIR}/../images/lean.png")
 set(CPACK_DMG_VOLUME_NAME "Lean-${LEAN_VERSION_STRING}")
 set(CPACK_BUNDLE_NAME "Lean-${LEAN_VERSION_STRING}")
-set(CPACK_BUNDLE_STARTUP_COMMAND "bin/leanemacs")
 set(CPACK_PACKAGE_ICON "${LEAN_SOURCE_DIR}/../images/lean.png")
 ##################
 
@@ -237,10 +249,33 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
     set(LEAN_EXTRA_LINKER_FLAGS "${LEAN_EXTRA_LINKER_FLAGS} -stdlib=libc++")
   endif ()
+elseif (MSVC)
+    # All good. Maybe enforce a recent version?
+    set(STATIC ON) # FIXME: not working yet
+    set(CMAKE_CXX_FLAGS                "/GL /EHsc /W2 /Zc:implicitNoexcept- -D_SCL_SECURE_NO_WARNINGS ${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS_DEBUG          "/Od /Zi ${CMAKE_CXX_FLAGS_DEBUG}")
+    set(CMAKE_CXX_FLAGS_MINSIZEREL     "/Os /Zc:inline ${CMAKE_CXX_FLAGS_MINSIZEREL}")
+    set(CMAKE_CXX_FLAGS_RELEASE        "/O2 /Oi /Oy /Zc:inline ${CMAKE_CXX_FLAGS_RELEASE}")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Oi /Zi ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+    set(LEAN_EXTRA_LINKER_FLAGS        "/LTCG:INCREMENTAL ${LEAN_EXTRA_LINKER_FLAGS}")
+    set(CMAKE_STATIC_LINKER_FLAGS      "${CMAKE_STATIC_LINKER_FLAGS} ${LEAN_EXTRA_LINKER_FLAGS}")
 elseif (EMSCRIPTEN)
     message(STATUS "Emscripten is detected: Make sure the wraped compiler supports C++11")
 else()
     message(FATAL_ERROR "Unsupported compiler: ${CMAKE_CXX_COMPILER_ID}")
+endif ()
+
+if (NOT MSVC)
+    set(CMAKE_CXX_FLAGS                "-Wall -Wextra -std=c++11 ${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS_DEBUG          "-g3 ${CMAKE_CXX_FLAGS_DEBUG}")
+    set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Os ${CMAKE_CXX_FLAGS_MINSIZEREL}")
+    set(CMAKE_CXX_FLAGS_RELEASE        "-O3 ${CMAKE_CXX_FLAGS_RELEASE}")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g3 ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+elseif (MULTI_THREAD)
+    set(CMAKE_CXX_FLAGS_DEBUG          "/MTd ${CMAKE_CXX_FLAGS_DEBUG}")
+    set(CMAKE_CXX_FLAGS_MINSIZEREL     "/MT ${CMAKE_CXX_FLAGS_MINSIZEREL}")
+    set(CMAKE_CXX_FLAGS_RELEASE        "/MT ${CMAKE_CXX_FLAGS_RELEASE}")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MT ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 endif ()
 
 if (EMSCRIPTEN)
@@ -252,7 +287,7 @@ if (EMSCRIPTEN)
             URL https://gmplib.org/download/gmp/gmp-6.1.1.tar.bz2
             URL_HASH SHA256=a8109865f2893f1373b0a8ed5ff7429de8db696fc451b1036bd7bdf95bbeffd6
             BUILD_IN_SOURCE 1
-            CONFIGURE_COMMAND emconfigure ./configure "CFLAGS=-m32 -DPIC ${CFLAGS_EMSCRIPTEN}" --build=i686-pc-linux-gnu --disable-assembly --prefix=${gmp_install_prefix}
+            CONFIGURE_COMMAND emconfigure ./configure "CC_FOR_BUILD=gcc" "CFLAGS=-m32 -DPIC ${CFLAGS_EMSCRIPTEN}" --host=x86_64-pc-linux-gnu --build=i686-pc-linux-gnu --disable-assembly --prefix=${gmp_install_prefix}
             BUILD_COMMAND emmake make -j4
             INSTALL_COMMAND make install
     )
@@ -318,7 +353,7 @@ find_package(PythonInterp)
 include_directories(${LEAN_SOURCE_DIR})
 
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LEAN_EXTRA_LINKER_FLAGS}")
-if(MULTI_THREAD AND (NOT ("${CMAKE_SYSTEM_NAME}" MATCHES "Darwin")))
+if(MULTI_THREAD AND NOT MSVC AND (NOT ("${CMAKE_SYSTEM_NAME}" MATCHES "Darwin")))
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pthread")
 endif()
 set(CMAKE_EXE_LINKER_FLAGS_TESTCOV "${CMAKE_EXE_LINKER_FLAGS} -fprofile-arcs -ftest-coverage")
@@ -351,10 +386,7 @@ configure_file("${LEAN_SOURCE_DIR}/githash.h.in" "${LEAN_BINARY_DIR}/githash.h")
 
 # Version
 configure_file("${LEAN_SOURCE_DIR}/version.h.in" "${LEAN_BINARY_DIR}/version.h")
-
-# leanemacs file
-configure_file("${LEAN_SOURCE_DIR}/../bin/leanemacs.in" "${LEAN_SOURCE_DIR}/../bin/leanemacs")
-configure_file("${LEAN_SOURCE_DIR}/../bin/leanemacs.bat.in" "${LEAN_SOURCE_DIR}/../bin/leanemacs.bat")
+configure_file("${LEAN_SOURCE_DIR}/../library/init/version.lean.in" "${LEAN_SOURCE_DIR}/../library/init/version.lean")
 
 include_directories("${LEAN_BINARY_DIR}")
 add_subdirectory(util)
@@ -363,8 +395,6 @@ add_subdirectory(util/numerics)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:numerics>)
 add_subdirectory(util/sexpr)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:sexpr>)
-add_subdirectory(util/lp)
-set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:lp>)
 add_subdirectory(kernel)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:kernel>)
 add_subdirectory(kernel/inductive)
@@ -390,12 +420,8 @@ add_subdirectory(library/vm)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:vm>)
 add_subdirectory(library/compiler)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:compiler>)
-add_subdirectory(library/native_compiler)
-set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:native_compiler>)
 add_subdirectory(frontends/lean)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:lean_frontend>)
-add_subdirectory(frontends/smt2)
-set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:smt2_frontend>)
 add_subdirectory(init)
 set(LEAN_OBJS ${LEAN_OBJS} $<TARGET_OBJECTS:init>)
 if(EMSCRIPTEN)
@@ -419,7 +445,6 @@ if (NOT("${CROSS_COMPILE}" MATCHES "ON"))
 endif()
 
 add_subdirectory(shell)
-add_subdirectory(emacs)
 
 function(add_exec_test name tgt)
     if(${EMSCRIPTEN})
@@ -442,7 +467,6 @@ add_subdirectory(tests/shell)
 if (NOT("${CROSS_COMPILE}" MATCHES "ON") AND ("${STATIC}" MATCHES "OFF"))
   add_subdirectory(tests/shared)
 endif()
-add_subdirectory(tests/util/lp)
 
 # Include style check
 if (NOT(${CMAKE_SYSTEM_NAME} MATCHES "Windows") AND PYTHONINTERP_FOUND)
@@ -464,11 +488,10 @@ endif ()
 add_custom_target(
     standard_lib ALL
     COMMAND "${LEAN_SOURCE_DIR}/../bin/lean" --make ${LEAN_EXTRA_MAKE_OPTS}
-    DEPENDS "${CMAKE_BINARY_DIR}/shell/lean"
+    DEPENDS bin_lean
     WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../library"
     )
 
-configure_file("${LEAN_SOURCE_DIR}/../leanpkg/leanpkg/config_vars.lean.in" "${LEAN_SOURCE_DIR}/../leanpkg/leanpkg/config_vars.lean")
 add_custom_target(
     leanpkg ALL
     COMMAND "${LEAN_SOURCE_DIR}/../bin/lean" --make ${LEAN_EXTRA_MAKE_OPTS}
@@ -481,8 +504,13 @@ add_custom_target(clean-std-lib
   COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_MODULE_PATH}/CleanOlean.cmake"
   )
 
+add_custom_target(clean-leanpkg
+  WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../leanpkg"
+  COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_MODULE_PATH}/CleanOlean.cmake"
+  )
+
 add_custom_target(clean-olean
-  DEPENDS clean-std-lib)
+  DEPENDS clean-std-lib clean-leanpkg)
 
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
   install(FILES "${CMAKE_SOURCE_DIR}/../bin/leanpkg.bat" "${CMAKE_SOURCE_DIR}/../bin/leanpkg.bat"
@@ -493,16 +521,6 @@ endif()
 install(FILES "${CMAKE_SOURCE_DIR}/../bin/leanpkg"
   DESTINATION bin
   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-  install(FILES "${CMAKE_SOURCE_DIR}/../bin/leanemacs.bat" "${CMAKE_SOURCE_DIR}/../bin/leanemacs.bat"
-    DESTINATION bin
-    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-else()
-  install(FILES "${CMAKE_SOURCE_DIR}/../bin/leanemacs" "${CMAKE_SOURCE_DIR}/../bin/leanemacs"
-    DESTINATION bin
-    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-endif()
 
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/../library" DESTINATION "${LIBRARY_DIR}"
         FILES_MATCHING
@@ -521,9 +539,6 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/../leanpkg" DESTINATION "${LIBRARY_DIR}"
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/" DESTINATION "${LEAN_EXT_INCLUDE_DIR}"
         FILES_MATCHING
         PATTERN "*.h")
-
-install(FILES "${CMAKE_SOURCE_DIR}/../src/emacs/lean.pgm"
-        DESTINATION "${EMACS_LISP_DIR}")
 
 if("${INCLUDE_MSYS2_DLLS}" MATCHES "ON")
   # TODO(Leo): do not use hardlinks to required DLLs.

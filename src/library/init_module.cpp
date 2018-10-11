@@ -35,6 +35,7 @@ Author: Leonardo de Moura
 #include "library/user_recursors.h"
 #include "library/noncomputable.h"
 #include "library/aux_recursors.h"
+#include "library/abstract_context_cache.h"
 #include "library/type_context.h"
 #include "library/local_context.h"
 #include "library/metavar_context.h"
@@ -43,7 +44,6 @@ Author: Leonardo de Moura
 #include "library/delayed_abstraction.h"
 #include "library/app_builder.h"
 #include "library/fun_info.h"
-#include "library/mpq_macro.h"
 #include "library/inverse.h"
 #include "library/pattern_attribute.h"
 #include "library/comp_val.h"
@@ -53,6 +53,8 @@ Author: Leonardo de Moura
 #include "library/check.h"
 #include "library/parray.h"
 #include "library/profiling.h"
+#include "library/time_task.h"
+#include "library/unique_id.h"
 
 namespace lean {
 void initialize_library_core_module() {
@@ -74,6 +76,7 @@ void finalize_library_core_module() {
 }
 
 void initialize_library_module() {
+    initialize_unique_id();
     initialize_local_context();
     initialize_metavar_context();
     initialize_fingerprint();
@@ -106,9 +109,9 @@ void initialize_library_module() {
     initialize_app_builder();
     initialize_fun_info();
     initialize_unification_hint();
+    initialize_abstract_context_cache();
     initialize_type_context();
     initialize_delayed_abstraction();
-    initialize_mpq_macro();
     initialize_inverse();
     initialize_pattern_attribute();
     initialize_comp_val();
@@ -117,9 +120,11 @@ void initialize_library_module() {
     initialize_check();
     initialize_congr_lemma();
     initialize_parray();
+    initialize_time_task();
 }
 
 void finalize_library_module() {
+    finalize_time_task();
     finalize_parray();
     finalize_congr_lemma();
     finalize_check();
@@ -128,9 +133,9 @@ void finalize_library_module() {
     finalize_comp_val();
     finalize_pattern_attribute();
     finalize_inverse();
-    finalize_mpq_macro();
     finalize_delayed_abstraction();
     finalize_type_context();
+    finalize_abstract_context_cache();
     finalize_unification_hint();
     finalize_fun_info();
     finalize_app_builder();
@@ -163,5 +168,6 @@ void finalize_library_module() {
     finalize_fingerprint();
     finalize_metavar_context();
     finalize_local_context();
+    finalize_unique_id();
 }
 }

@@ -15,10 +15,15 @@ Author: Leonardo de Moura, Gabriel Ebner
 #include <vector>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <dirent.h>
 #include "util/exception.h"
 #include "util/sstream.h"
 #include "util/optional.h"
+
+#ifdef _MSC_VER
+#define S_ISDIR(mode) ((mode & _S_IFDIR) != 0)
+#else
+#include <dirent.h>
+#endif
 
 namespace lean {
 file_not_found_exception::file_not_found_exception(std::string const & fname):
@@ -187,10 +192,22 @@ bool is_directory(std::string const & fn) {
 }
 
 std::vector<std::string> read_dir(std::string const &dirname) {
+    std::vector<std::string> files;
+#ifdef _MSC_VER
+    WIN32_FIND_DATA data;
+    std::string dir = dirname + "\\*";
+    HANDLE hFind = FindFirstFile(dir.c_str(), &data);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (strcmp(data.cFileName, ".") != 0 && strcmp(data.cFileName, "..") != 0)
+                files.push_back(dirname + '\\' + data.cFileName);
+        } while (FindNextFile(hFind, &data));
+        FindClose(hFind);
+    }
+#else
     auto dir = opendir(dirname.c_str());
     if (!dir) throw exception(sstream() << "could not open directory " << dirname << ": " << std::strerror(errno));
 
-    std::vector<std::string> files;
     while (auto ep = readdir(dir)) { // NOLINT
         // ^^ disabling readdir_r lint because glibc recommends using readdir now.
 
@@ -199,6 +216,7 @@ std::vector<std::string> read_dir(std::string const &dirname) {
         files.push_back(dirname + get_dir_sep() + fn);
     }
     closedir(dir);
+#endif
     return files;
 }
 

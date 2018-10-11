@@ -14,8 +14,6 @@ meta constant tactic_state : Type
 universes u v
 
 namespace tactic_state
-/-- Create a tactic state with an empty local context and a dummy goal. -/
-meta constant mk_empty    : environment → options → tactic_state
 meta constant env         : tactic_state → environment
 /-- Format the given tactic state. If `target_lhs_only` is true and the target
     is of the form `lhs ~ rhs`, where `~` is a simplification relation,
@@ -59,9 +57,9 @@ infixl ` >>=[tactic] `:2 := interaction_monad_bind
 infixl ` >>[tactic] `:2  := interaction_monad_seq
 
 meta instance : alternative tactic :=
-{ interaction_monad.monad with
-  failure := @interaction_monad.failed _,
-  orelse  := @interaction_monad_orelse _ }
+{ failure := @interaction_monad.failed _,
+  orelse  := @interaction_monad_orelse _,
+  ..interaction_monad.monad }
 
 meta def {u₁ u₂} tactic.up {α : Type u₂} (t : tactic α) : tactic (ulift.{u₁} α) :=
 λ s, match t s with
@@ -114,18 +112,18 @@ meta def success_if_fail {α : Type u} (t : tactic α) : tactic unit :=
 end
 
 open nat
-/-- (repeat_at_most n t): repeat the given tactic at most n times or until t fails -/
-meta def repeat_at_most : nat → tactic unit → tactic unit
+/-- (iterate_at_most n t): repeat the given tactic at most n times or until t fails -/
+meta def iterate_at_most : nat → tactic unit → tactic unit
 | 0        t := skip
-| (succ n) t := (do t, repeat_at_most n t) <|> skip
+| (succ n) t := (do t, iterate_at_most n t) <|> skip
 
-/-- (repeat_exactly n t) : execute t n times -/
-meta def repeat_exactly : nat → tactic unit → tactic unit
+/-- (iterate_exactly n t) : execute t n times -/
+meta def iterate_exactly : nat → tactic unit → tactic unit
 | 0        t := skip
-| (succ n) t := do t, repeat_exactly n t
+| (succ n) t := do t, iterate_exactly n t
 
-meta def repeat : tactic unit → tactic unit :=
-repeat_at_most 100000
+meta def iterate : tactic unit → tactic unit :=
+iterate_at_most 100000
 
 meta def returnopt (e : option α) : tactic α :=
 λ s, match e with
@@ -194,7 +192,7 @@ has_to_tactic_format.to_tactic_format
 open tactic format
 
 meta instance {α : Type u} [has_to_tactic_format α] : has_to_tactic_format (list α) :=
-⟨has_map.map to_fmt ∘ monad.mapm pp⟩
+⟨λ l, to_fmt <$> l.mmap pp⟩
 
 meta instance (α : Type u) (β : Type v) [has_to_tactic_format α] [has_to_tactic_format β] :
  has_to_tactic_format (α × β) :=
@@ -260,8 +258,11 @@ meta constant intron        : nat → tactic unit
 /-- Clear the given local constant. The tactic fails if the given expression is not a local constant. -/
 meta constant clear         : expr → tactic unit
 meta constant revert_lst    : list expr → tactic nat
-/-- Return `e` in weak head normal form with respect to the given transparency setting. -/
-meta constant whnf (e : expr) (md := semireducible) : tactic expr
+/-- Return `e` in weak head normal form with respect to the given transparency setting.
+    If `unfold_ginductive` is `tt`, then nested and/or mutually recursive inductive datatype constructors
+    and types are unfolded. Recall that nested and mutually recursive inductive datatype declarations
+    are compiled into primitive datatypes accepted by the Kernel. -/
+meta constant whnf (e : expr) (md := semireducible) (unfold_ginductive := tt) : tactic expr
 /-- (head) eta expand the given expression -/
 meta constant head_eta_expand : expr → tactic expr
 /-- (head) beta reduction -/
@@ -273,9 +274,9 @@ meta constant zeta            : expr → tactic expr
 /-- (head) eta reduction -/
 meta constant head_eta        : expr → tactic expr
 /-- Succeeds if `t` and `s` can be unified using the given transparency setting. -/
-meta constant unify (t s : expr) (md := semireducible) : tactic unit
+meta constant unify (t s : expr) (md := semireducible) (approx := ff) : tactic unit
 /-- Similar to `unify`, but it treats metavariables as constants. -/
-meta constant is_def_eq (t s : expr) (md := semireducible) : tactic unit
+meta constant is_def_eq (t s : expr) (md := semireducible) (approx := ff) : tactic unit
 /-- Infer the type of the given expression.
    Remark: transparency does not affect type inference -/
 meta constant infer_type    : expr → tactic expr
@@ -285,7 +286,7 @@ meta constant get_local     : name → tactic expr
 meta constant resolve_name  : name → tactic pexpr
 /-- Return the hypothesis in the main goal. Fail if tactic_state does not have any goal left. -/
 meta constant local_context : tactic (list expr)
-meta constant get_unused_name (n : name) (i : option nat := none) : tactic name
+meta constant get_unused_name (n : name := `_x) (i : option nat := none) : tactic name
 /--  Helper tactic for creating simple applications where some arguments are inferred using
     type inference.
 
@@ -339,7 +340,7 @@ meta constant mk_eq_mpr      : expr → expr → tactic expr
 /- Given a local constant t, if t has type (lhs = rhs) apply substitution.
    Otherwise, try to find a local constant that has type of the form (t = t') or (t' = t).
    The tactic fails if the given expression is not a local constant. -/
-meta constant subst         : expr → tactic unit
+meta constant subst_core     : expr → tactic unit
 /-- Close the current goal using `e`. Fail is the type of `e` is not definitionally equal to
     the target type. -/
 meta constant exact (e : expr) (md := semireducible) : tactic unit
@@ -370,7 +371,17 @@ meta constant get_goals     : tactic (list expr)
 meta constant set_goals     : list expr → tactic unit
 inductive new_goals
 | non_dep_first | non_dep_only | all
-/-- Configuration options for the `apply` tactic. -/
+/-- Configuration options for the `apply` tactic.
+
+- `new_goals` is the strategy for ordering new goals.
+- `instances` if `tt`, then `apply` tries to synthesize unresolved `[...]` arguments using type class resolution.
+- `auto_param` if `tt`, then `apply` tries to synthesize unresolved `(h : p . tac_id)` arguments using tactic `tac_id`.
+- `opt_param` if `tt`, then `apply` tries to synthesize unresolved `(a : t := v)` arguments by setting them to `v`.
+- `unify` if `tt`, then `apply` is free to assign existing metavariables in the goal when solving unification constraints.
+   For example, in the goal `|- ?x < succ 0`, the tactic `apply succ_lt_succ` succeeds with the default configuration,
+   but `apply_with succ_lt_succ {unify := ff}` doesn't since it would require Lean to assign `?x` to `succ ?y` where
+   `?y` is a fresh metavariable.
+-/
 structure apply_cfg :=
 (md            := semireducible)
 (approx        := tt)
@@ -378,14 +389,15 @@ structure apply_cfg :=
 (instances     := tt)
 (auto_param    := tt)
 (opt_param     := tt)
+(unify         := tt)
 /-- Apply the expression `e` to the main goal,
     the unification is performed using the transparency mode in `cfg`.
     If `cfg.approx` is `tt`, then fallback to first-order unification, and approximate context during unification.
     `cfg.new_goals` specifies which unassigned metavariables become new goals, and their order.
     If `cfg.instances` is `tt`, then use type class resolution to instantiate unassigned meta-variables.
     The fields `cfg.auto_param` and `cfg.opt_param` are ignored by this tactic (See `tactic.apply`).
-    It returns a list of all introduced meta variables, even the assigned ones. -/
-meta constant apply_core (e : expr) (cfg : apply_cfg := {}) : tactic (list expr)
+    It returns a list of all introduced meta variables and the parameter name associated with them, even the assigned ones. -/
+meta constant apply_core (e : expr) (cfg : apply_cfg := {}) : tactic (list (name × expr))
 /- Create a fresh meta universe variable. -/
 meta constant mk_meta_univ  : tactic level
 /- Create a fresh meta-variable with the given type.
@@ -401,23 +413,20 @@ meta constant get_assignment : expr → tactic expr
     Fail if argument is not a meta-variable. -/
 meta constant is_assigned : expr → tactic bool
 meta constant mk_fresh_name : tactic name
-/-- Return a hash code for expr that ignores inst_implicit arguments,
-   and proofs. -/
-meta constant abstract_hash : expr → tactic nat
-/-- Return the "weight" of the given expr while ignoring inst_implicit arguments,
-   and proofs. -/
-meta constant abstract_weight : expr → tactic nat
-meta constant abstract_eq     : expr → expr → tactic bool
+
 /-- Induction on `h` using recursor `rec`, names for the new hypotheses
    are retrieved from `ns`. If `ns` does not have sufficient names, then use the internal binder names
    in the recursor.
-   It returns for each new goal a list of new hypotheses and a list of substitutions for hypotheses
+   It returns for each new goal the name of the constructor (if `rec_name` is a builtin recursor),
+   a list of new hypotheses, and a list of substitutions for hypotheses
    depending on `h`. The substitutions map internal names to their replacement terms. If the
    replacement is again a hypothesis the user name stays the same. The internal names are only valid
    in the original goal, not in the type context of the new goal.
+   Remark: if `rec_name` is not a builtin recursor, we use parameter names of `rec_name` instead of
+   constructor names.
 
    If `rec` is none, then the type of `h` is inferred, if it is of the form `C ...`, tactic uses `C.rec` -/
-meta constant induction (h : expr) (ns : list name := []) (rec : option name := none) (md := semireducible) : tactic (list (list expr × list (name × expr)))
+meta constant induction (h : expr) (ns : list name := []) (rec : option name := none) (md := semireducible) : tactic (list (name × list expr × list (name × expr)))
 /-- Apply `cases_on` recursor, names for the new hypotheses are retrieved from `ns`.
    `h` must be a local constant. It returns for each new goal the name of the constructor, a list of new hypotheses, and a list of
    substitutions for hypotheses depending on `h`. The number of new goals may be smaller than the
@@ -484,8 +493,10 @@ meta constant open_namespaces : tactic (list name)
     The main idea is to minimize the number of `is_def_eq` checks
     performed. -/
 meta constant kdepends_on (e t : expr) (md := reducible) : tactic bool
-/-- Abstracts all occurrences of the term `t` in `e` using keyed matching. -/
-meta constant kabstract (e t : expr) (md := reducible) : tactic expr
+/-- Abstracts all occurrences of the term `t` in `e` using keyed matching.
+    If `unify` is `ff`, then matching is used instead of unification.
+    That is, metavariables occurring in `e` are not assigned. -/
+meta constant kabstract (e t : expr) (md := reducible) (unify := tt) : tactic expr
 
 /-- Blocks the execution of the current thread for at least `msecs` milliseconds.
     This tactic is used mainly for debugging purposes. -/
@@ -495,6 +506,37 @@ meta constant sleep (msecs : nat) : tactic unit
     Fails if `e` is not type correct. -/
 meta constant type_check (e : expr) (md := semireducible) : tactic unit
 open list nat
+
+/-- Goals can be tagged using a list of names. -/
+def tag : Type := list name
+
+/-- Enable/disable goal tagging -/
+meta constant enable_tags (b : bool) : tactic unit
+/-- Return tt iff goal tagging is enabled. -/
+meta constant tags_enabled : tactic bool
+/-- Tag goal `g` with tag `t`. It does nothing is goal tagging is disabled.
+    Remark: `set_goal g []` removes the tag -/
+meta constant set_tag (g : expr) (t : tag) : tactic unit
+/-- Return tag associated with `g`. Return `[]` if there is no tag. -/
+meta constant get_tag (g : expr) : tactic tag
+
+/-- By default, Lean only considers local instances in the header of declarations.
+    This has two main benefits.
+    1- Results produced by the type class resolution procedure can be easily cached.
+    2- The set of local instances does not have to be recomputed.
+
+    This approach has the following disadvantages:
+    1- Frozen local instances cannot be reverted.
+    2- Local instances defined inside of a declaration are not considered during type
+       class resolution.
+
+    This tactic resets the set of local instances. After executing this tactic,
+    the set of local instances will be recomputed and the cache will be frequently
+    reset. Note that, the cache is still used when executing a single tactic that
+    may generate many type class resolution problems (e.g., `simp`). -/
+meta constant unfreeze_local_instances : tactic unit
+/- Return the list of frozen local instances. Return `none` if local instances were not frozen. -/
+meta constant frozen_local_instances : tactic (option (list expr))
 
 meta def induction' (h : expr) (ns : list name := []) (rec : option name := none) (md := semireducible) : tactic unit :=
 induction h ns rec md >> return ()
@@ -526,6 +568,11 @@ infer_type e >>= is_prop
 
 meta def whnf_no_delta (e : expr) : tactic expr :=
 whnf e transparency.none
+
+/-- Return `e` in weak head normal form with respect to the given transparency setting,
+    or `e` head is a generalized constructor or inductive datatype. -/
+meta def whnf_ginductive (e : expr) (md := semireducible) : tactic expr :=
+whnf e md ff
 
 meta def whnf_target : tactic unit :=
 target >>= whnf >>= change
@@ -582,6 +629,20 @@ to_expr q
 
 meta def revert (l : expr) : tactic nat :=
 revert_lst [l]
+
+/- Revert "all" hypotheses. Actually, the tactic only reverts
+   hypotheses occurring after the last frozen local instance.
+   Recall that frozen local instances cannot be reverted.
+   We can use `unfreeze_local_instances` to workaround this limitation. -/
+meta def revert_all : tactic nat :=
+do lctx ← local_context,
+   lis  ← frozen_local_instances,
+   match lis with
+   | none           := revert_lst lctx
+   | some []        := revert_lst lctx
+                       /- `hi` is the last local instance. We shoul truncate `lctx` at `hi`. -/
+   | some (hi::his) := revert_lst $ lctx.foldl (λ r h, if h.local_uniq_name = hi.local_uniq_name then [] else h :: r) []
+   end
 
 meta def clear_lst : list name → tactic unit
 | []      := skip
@@ -647,6 +708,13 @@ format_result >>= trace
 
 meta def rexact (e : expr) : tactic unit :=
 exact e reducible
+
+meta def any_hyp_aux {α : Type} (f : expr → tactic α) : list expr → tactic α
+| []        := failed
+| (h :: hs) := f h <|> any_hyp_aux hs
+
+meta def any_hyp {α : Type} (f : expr → tactic α) : tactic α :=
+local_context >>= any_hyp_aux f
 
 /-- `find_same_type t es` tries to find in es an expression with type definitionally equal to t -/
 meta def find_same_type : expr → list expr → tactic expr
@@ -719,6 +787,24 @@ do ng ← num_goals,
 
 meta def rotate : nat → tactic unit :=
 rotate_left
+
+private meta def repeat_aux (t : tactic unit) : list expr → list expr → tactic unit
+| []      r := set_goals r.reverse
+| (g::gs) r := do
+  ok ← try_core (set_goals [g] >> t),
+  match ok with
+  | none := repeat_aux gs (g::r)
+  | _    := do
+    gs' ← get_goals,
+    repeat_aux (gs' ++ gs) r
+  end
+
+/-- This tactic is applied to each goal. If the application succeeds,
+    the tactic is applied recursively to all the generated subgoals until it eventually fails.
+    The recursion stops in a subgoal when the tactic has failed to make progress.
+    The tactic `repeat` never fails. -/
+meta def repeat (t : tactic unit) : tactic unit :=
+do gs ← get_goals, repeat_aux t gs []
 
 /-- `first [t_1, ..., t_n]` applies the first tactic that doesn't fail.
    The tactic fails if all t_i's fail. -/
@@ -859,18 +945,36 @@ meta def try_apply_opt_auto_param (cfg : apply_cfg) (ms : list expr) : tactic un
 when (cfg.auto_param || cfg.opt_param) $
 mwhen (has_opt_auto_param ms) $ do
   gs ← get_goals,
-  ms.mmap' (λ m, set_goals [m] >>
-                 when cfg.opt_param (try apply_opt_param) >>
-                 when cfg.auto_param (try apply_auto_param)),
+  ms.mmap' (λ m, mwhen (bnot <$> is_assigned m) $
+                   set_goals [m] >>
+                   when cfg.opt_param (try apply_opt_param) >>
+                   when cfg.auto_param (try apply_auto_param)),
   set_goals gs
 
-meta def apply (e : expr) (cfg : apply_cfg := {}) : tactic unit :=
-apply_core e cfg >>= try_apply_opt_auto_param cfg
+meta def has_opt_auto_param_for_apply (ms : list (name × expr)) : tactic bool :=
+ms.mfoldl
+ (λ r m, do type ← infer_type m.2,
+            return $ r || type.is_napp_of `opt_param 2 || type.is_napp_of `auto_param 2)
+ ff
 
-meta def fapply (e : expr) : tactic unit :=
+meta def try_apply_opt_auto_param_for_apply (cfg : apply_cfg) (ms : list (name × expr)) : tactic unit :=
+mwhen (has_opt_auto_param_for_apply ms) $ do
+  gs ← get_goals,
+  ms.mmap' (λ m, mwhen (bnot <$> (is_assigned m.2)) $
+                   set_goals [m.2] >>
+                   when cfg.opt_param (try apply_opt_param) >>
+                   when cfg.auto_param (try apply_auto_param)),
+  set_goals gs
+
+meta def apply (e : expr) (cfg : apply_cfg := {}) : tactic (list (name × expr)) :=
+do r ← apply_core e cfg,
+   try_apply_opt_auto_param_for_apply cfg r,
+   return r
+
+meta def fapply (e : expr) : tactic (list (name × expr)) :=
 apply e {new_goals := new_goals.all}
 
-meta def eapply (e : expr) : tactic unit :=
+meta def eapply (e : expr) : tactic (list (name × expr)) :=
 apply e {new_goals := new_goals.non_dep_only}
 
 /-- Try to solve the main goal using type class resolution. -/
@@ -897,11 +1001,11 @@ do env  ← get_env,
    return (expr.const c ls)
 
 /-- Apply the constant `c` -/
-meta def applyc (c : name) : tactic unit :=
-mk_const c >>= apply
+meta def applyc (c : name) (cfg : apply_cfg := {}) : tactic unit :=
+do c ← mk_const c, apply c cfg, skip
 
 meta def eapplyc (c : name) : tactic unit :=
-mk_const c >>= eapply
+do c ← mk_const c, eapply c, skip
 
 meta def save_const_type_info (n : name) {elab : bool} (ref : expr elab) : tactic unit :=
 try (do c ← mk_const n, save_type_info c ref)
@@ -964,7 +1068,7 @@ meta def by_contradiction (H : option name := none) : tactic expr :=
 do tgt : expr ← target,
    (match_not tgt >> return ())
    <|>
-   (mk_mapp `decidable.by_contradiction [some tgt, none] >>= eapply)
+   (mk_mapp `decidable.by_contradiction [some tgt, none] >>= eapply >> skip)
    <|>
    fail "tactic by_contradiction failed, target is not a negation nor a decidable proposition (remark: when 'local attribute classical.prop_decidable [instance]' is used all propositions are decidable)",
    match H with
@@ -1003,13 +1107,15 @@ revert_kdependencies e md
     Remark, it reverts dependencies using `revert_kdeps`.
 
     Two different transparency modes are used `md` and `dmd`.
-    The mode `md` is used with `cases_core` and `dmd` with `generalize` and `revert_kdeps`. -/
-meta def cases (e : expr) (ids : list name := []) (md := semireducible) (dmd := semireducible) : tactic unit :=
+    The mode `md` is used with `cases_core` and `dmd` with `generalize` and `revert_kdeps`.
+
+    It returns the constructor names associated with each new goal. -/
+meta def cases (e : expr) (ids : list name := []) (md := semireducible) (dmd := semireducible) : tactic (list name) :=
 if e.is_local_constant then
-  cases_core e ids md >> return ()
+  do r ← cases_core e ids md, return $ r.map (λ t, t.1)
 else do
-  x ← mk_fresh_name,
   n ← revert_kdependencies e dmd,
+  x ← get_unused_name,
   (tactic.generalize e x dmd)
   <|>
   (do t ← infer_type e,
@@ -1017,7 +1123,7 @@ else do
       get_local x >>= tactic.revert,
       return ()),
   h ← tactic.intro1,
-  (step (cases_core h ids md); intron n)
+  focus1 (do r ← cases_core h ids md, all_goals (intron n), return $ r.map (λ t, t.1))
 
 meta def refine (e : pexpr) : tactic unit :=
 do tgt : expr ← target,
@@ -1028,7 +1134,26 @@ do dec_e ← (mk_app `decidable [e] <|> fail "by_cases tactic failed, type is no
    inst  ← (mk_instance dec_e <|> fail "by_cases tactic failed, type of given expression is not decidable"),
    t     ← target,
    tm    ← mk_mapp `dite [some e, some inst, some t],
-   seq (apply tm) (intro h >> skip)
+   seq (apply tm >> skip) (intro h >> skip)
+
+meta def funext_core : list name → bool → tactic unit
+| []  tt       := return ()
+| ids only_ids := try $
+   do some (lhs, rhs) ← expr.is_eq <$> (target >>= whnf),
+      applyc `funext,
+      id ← if ids.empty ∨ ids.head = `_ then do
+             (expr.lam n _ _ _) ← whnf lhs
+               | pure `_,
+             return n
+           else return ids.head,
+      intro id,
+      funext_core ids.tail only_ids
+
+meta def funext : tactic unit :=
+funext_core [] ff
+
+meta def funext_lst (ids : list name) : tactic unit :=
+funext_core ids tt
 
 private meta def get_undeclared_const (env : environment) (base : name) : ℕ → name | i :=
 let n := base <.> ("_aux_" ++ repr i) in
@@ -1118,6 +1243,33 @@ do h_type ← infer_type h,
    try $ clear h,
    return new_h
 
+meta def main_goal : tactic expr :=
+do g::gs ← get_goals, return g
+
+/- Goal tagging support -/
+meta def with_enable_tags {α : Type} (t : tactic α) (b := tt) : tactic α :=
+do old ← tags_enabled,
+   enable_tags b,
+   r ← t,
+   enable_tags old,
+   return r
+
+meta def get_main_tag : tactic tag :=
+main_goal >>= get_tag
+
+meta def set_main_tag (t : tag) : tactic unit :=
+do g ← main_goal, set_tag g t
+
+meta def subst (h : expr) : tactic unit :=
+(do guard h.is_local_constant,
+    some (α, lhs, β, rhs) ← expr.is_heq <$> infer_type h,
+    is_def_eq α β,
+    new_h_type ← mk_app `eq [lhs, rhs],
+    new_h_pr   ← mk_app `eq_of_heq [h],
+    new_h ← assertv h.local_pp_name new_h_type new_h_pr,
+    try (clear h),
+    subst_core new_h)
+<|> subst_core h
 end tactic
 
 notation [parsing_only] `command`:max := tactic unit
@@ -1139,73 +1291,31 @@ meta def any_of {α β} : list α → (α → tactic β) → tactic β
                    end
 end list
 
-/-
-  Define id_locked using meta-programming because we don't have
-  syntax for setting reducibility_hints.
-
-  See module init.meta.declaration.
-
-  Remark: id_locked is used in the builtin implementation of tactic.change
--/
-run_cmd do
- let l  := level.param `l,
- let Ty : pexpr := expr.sort l,
- type ← to_expr ``(Π {α : %%Ty}, α → α),
- val  ← to_expr ``(λ {α : %%Ty} (a : α), a),
- add_decl (declaration.defn `id_locked [`l] type val reducibility_hints.opaque tt)
-
-lemma id_locked_eq {α : Type u} (a : α) : id_locked a = a :=
-rfl
-
-attribute [inline] id_locked
-
-/-
-  Define id_rhs using meta-programming because we don't have
-  syntax for setting reducibility_hints.
-
-  See module init.meta.declaration.
-
-  Remark: id_rhs is used in the equation compiler to address performance
-  issues when proving equational lemmas.
--/
-run_cmd do
- let l  := level.param `l,
- let Ty : pexpr := expr.sort l,
- type ← to_expr ``(Π (α : %%Ty), α → α),
- val  ← to_expr ``(λ (α : %%Ty) (a : α), a),
- add_decl (declaration.defn `id_rhs [`l] type val reducibility_hints.abbrev tt)
-
-attribute [reducible, inline] id_rhs
-
 /- Install monad laws tactic and use it to prove some instances. -/
 
-meta def control_laws_tac := whnf_target >> intros >> to_expr ``(rfl) >>= exact
 meta def order_laws_tac := whnf_target >> intros >> to_expr ``(iff.refl _) >>= exact
 
-meta def unsafe_monad_from_pure_bind {m : Type u → Type v}
+meta def monad_from_pure_bind {m : Type u → Type v}
   (pure : Π {α : Type u}, α → m α)
   (bind : Π {α β : Type u}, m α → (α → m β) → m β) : monad m :=
-{pure := @pure, bind := @bind,
- id_map := undefined, pure_bind := undefined, bind_assoc := undefined}
+{pure := @pure, bind := @bind}
 
 meta instance : monad task :=
-{map := @task.map, bind := @task.bind, pure := @task.pure,
- id_map := undefined, pure_bind := undefined, bind_assoc := undefined,
- bind_pure_comp_eq_map := undefined}
+{map := @task.map, bind := @task.bind, pure := @task.pure}
 
 namespace tactic
-meta def mk_id_locked_proof (prop : expr) (pr : expr) : expr :=
-expr.app (expr.app (expr.const ``id_locked [level.zero]) prop) pr
+meta def mk_id_proof (prop : expr) (pr : expr) : expr :=
+expr.app (expr.app (expr.const ``id [level.zero]) prop) pr
 
-meta def mk_id_locked_eq (lhs : expr) (rhs : expr) (pr : expr) : tactic expr :=
+meta def mk_id_eq (lhs : expr) (rhs : expr) (pr : expr) : tactic expr :=
 do prop ← mk_app `eq [lhs, rhs],
-   return $ mk_id_locked_proof prop pr
+   return $ mk_id_proof prop pr
 
 meta def replace_target (new_target : expr) (pr : expr) : tactic unit :=
 do t ← target,
    assert `htarget new_target, swap,
    ht        ← get_local `htarget,
-   locked_pr ← mk_id_locked_eq t new_target pr,
+   locked_pr ← mk_id_eq t new_target pr,
    mk_eq_mpr locked_pr ht >>= exact
 
 end tactic

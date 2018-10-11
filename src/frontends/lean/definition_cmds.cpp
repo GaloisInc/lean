@@ -6,6 +6,7 @@ Author: Leonardo de Moura
 */
 #include <string>
 #include <vector>
+#include "library/time_task.h"
 #include "library/profiling.h"
 #include "library/library_task_builder.h"
 #include "library/sorry.h"
@@ -14,6 +15,7 @@ Author: Leonardo de Moura
 #include "kernel/declaration.h"
 #include "kernel/instantiate.h"
 #include "kernel/replace_fn.h"
+#include "kernel/kernel_exception.h"
 #include "library/trace.h"
 #include "library/constants.h"
 #include "library/explicit.h"
@@ -83,13 +85,14 @@ optional<expr> parse_using_well_founded(parser & p) {
     }
 }
 
-expr mk_equations(parser & p, buffer<expr> const & fns, buffer<name> const & fn_full_names, buffer<expr> const & eqs,
+expr mk_equations(parser & p, buffer<expr> const & fns,
+                  buffer<name> const & fn_full_names, buffer<name> const & fn_prv_names, buffer<expr> const & eqs,
                   optional<expr> const & wf_tacs, pos_info const & pos) {
     buffer<expr> new_eqs;
     for (expr const & eq : eqs) {
         new_eqs.push_back(Fun(fns, eq, p));
     }
-    equations_header h = mk_equations_header(to_list(fn_full_names));
+    equations_header h = mk_equations_header(to_list(fn_full_names), to_list(fn_prv_names));
     if (wf_tacs) {
         return p.save_pos(mk_equations(h, new_eqs.size(), new_eqs.data(), *wf_tacs), pos);
     } else {
@@ -97,11 +100,12 @@ expr mk_equations(parser & p, buffer<expr> const & fns, buffer<name> const & fn_
     }
 }
 
-expr mk_equations(parser & p, expr const & fn, name const & full_name, buffer<expr> const & eqs,
+expr mk_equations(parser & p, expr const & fn, name const & full_name, name const & full_prv_name, buffer<expr> const & eqs,
                   optional<expr> const & wf_tacs, pos_info const & pos) {
     buffer<expr> fns; fns.push_back(fn);
     buffer<name> full_names; full_names.push_back(full_name);
-    return mk_equations(p, fns, full_names, eqs, wf_tacs, pos);
+    buffer<name> full_prv_names; full_prv_names.push_back(full_prv_name);
+    return mk_equations(p, fns, full_names, full_prv_names, eqs, wf_tacs, pos);
 }
 
 void check_valid_end_of_equations(parser & p) {
@@ -114,19 +118,23 @@ void check_valid_end_of_equations(parser & p) {
     }
 }
 
-expr parse_mutual_definition(parser & p, buffer<name> & lp_names, buffer<expr> & fns, buffer<expr> & params) {
+static expr parse_mutual_definition(parser & p, buffer<name> & lp_names, buffer<expr> & fns, buffer<name> & prv_names,
+                                    buffer<expr> & params) {
     parser::local_scope scope1(p);
     auto header_pos = p.pos();
     buffer<expr> pre_fns;
     parse_mutual_header(p, lp_names, pre_fns, params);
     buffer<expr> eqns;
     buffer<name> full_names;
+    buffer<name> full_actual_names;
     for (expr const & pre_fn : pre_fns) {
         // TODO(leo, dhs): make use of attributes
         expr fn_type = parse_inner_header(p, mlocal_pp_name(pre_fn)).first;
         declaration_name_scope scope2(mlocal_pp_name(pre_fn));
         declaration_name_scope scope3("_main");
         full_names.push_back(scope3.get_name());
+        full_actual_names.push_back(scope3.get_actual_name());
+        prv_names.push_back(scope2.get_actual_name());
         if (p.curr_is_token(get_period_tk())) {
             auto period_pos = p.pos();
             p.next();
@@ -146,7 +154,7 @@ expr parse_mutual_definition(parser & p, buffer<name> & lp_names, buffer<expr> &
     for (expr & eq : eqns) {
         eq = replace_locals_preserving_pos_info(eq, pre_fns, fns);
     }
-    expr r = mk_equations(p, fns, full_names, eqns, wf_tacs, header_pos);
+    expr r = mk_equations(p, fns, full_names, full_actual_names, eqns, wf_tacs, header_pos);
     collect_implicit_locals(p, lp_names, params, r);
     return r;
 }
@@ -170,41 +178,22 @@ static void finalize_definition(elaborator & elab, buffer<expr> const & params, 
     lp_names.append(implicit_lp_names);
 }
 
-static pair<environment, name> mk_real_name(environment const & env, name const & c_name, bool is_private, pos_info const & pos) {
-    environment new_env = env;
-    name c_real_name;
-    if (is_private) {
-        unsigned h  = hash(pos.first, pos.second);
-        auto env_n  = add_private_name(new_env, c_name, optional<unsigned>(h));
-        new_env     = env_n.first;
-        c_real_name = env_n.second;
-    } else {
-        name const & ns = get_namespace(env);
-        c_real_name     = ns + c_name;
-    }
-    return mk_pair(new_env, c_real_name);
-}
-
-static expr fix_rec_fn_name(expr const & e, name const & c_name, name const & c_real_name) {
-    return replace(e, [&](expr const & m, unsigned) {
-            if (is_rec_fn_macro(m) && get_rec_fn_name(m) == c_name) {
-                return some_expr(mk_rec_fn_macro(c_real_name, get_rec_fn_type(m)));
-            }
-            return none_expr();
-        });
-}
-
 static certified_declaration check(parser & p, environment const & env, name const & c_name, declaration const & d, pos_info const & pos) {
-    if (p.profiling()) {
-        xtimeit timer(get_profiling_threshold(p.get_options()), [&](second_duration duration) {
-                auto msg = p.mk_message(pos, INFORMATION);
-                msg.get_text_stream().get_stream()
-                    << "type checking time of " << c_name << " took " << display_profiling_time{duration} << "\n";
-                msg.report();
-            });
+    try {
+        time_task _("type checking", p.mk_message(pos, INFORMATION), p.get_options(), c_name);
         return ::lean::check(env, d);
-    } else {
-        return ::lean::check(env, d);
+    } catch (kernel_exception & ex) {
+        unsigned i = get_pp_indent(p.get_options());
+        auto pp_fn = ::lean::mk_pp_ctx(env, p.get_options(), metavar_context(), local_context());
+        format msg = format("kernel failed to type check declaration '") + format(c_name) + format("' ") +
+            format("this is usually due to a buggy tactic or a bug in the builtin elaborator");
+        msg += line() + format("elaborated type:");
+        msg += nest(i, line() + pp_fn(d.get_type()));
+        if (d.is_definition()) {
+            msg += line() + format("elaborated value:");
+            msg += nest(i, line() + pp_fn(d.get_value()));
+        }
+        throw nested_exception(msg, ex);
     }
 }
 
@@ -229,6 +218,7 @@ static bool check_noncomputable(bool ignore_noncomputable, environment const & e
 static environment compile_decl(parser & p, environment const & env,
                                 name const & c_name, name const & c_real_name, pos_info const & pos) {
     try {
+        time_task _("compilation", p.mk_message(message_severity::INFORMATION), p.get_options(), c_real_name);
         return vm_compile(env, env.get(c_real_name));
     } catch (exception & ex) {
         // FIXME(gabriel): use position from exception
@@ -241,16 +231,19 @@ static environment compile_decl(parser & p, environment const & env,
 }
 
 static pair<environment, name>
-declare_definition(parser & p, environment const & env, def_cmd_kind kind, buffer<name> const & lp_names,
-                   name const & c_name, expr type, optional<expr> val, task<expr> const & proof, cmd_meta const & meta,
-                   pos_info const & pos) {
-    auto env_n = mk_real_name(env, c_name, meta.m_modifiers.m_is_private, pos);
-    environment new_env = env_n.first;
-    name c_real_name    = env_n.second;
-    if (val && meta.m_modifiers.m_is_meta) {
-        /* TODO(Leo): fix fix_rec_fn_name for mutual definitions.
-           We currently do not support meta mutual definitions. Thus, this is not currently an issue. */
-        *val = fix_rec_fn_name(*val, c_name, c_real_name);
+declare_definition(parser & p, environment const & env, decl_cmd_kind kind, buffer<name> const & lp_names,
+                   name const & c_name, name const & prv_name, expr type, optional<expr> val, task<expr> const & proof, cmd_meta const & meta,
+                   bool is_abbrev, pos_info const & pos) {
+    name c_real_name;
+    environment new_env = env;
+    if (has_private_prefix(new_env, prv_name)) {
+        new_env     = register_private_name(new_env, c_name, prv_name);
+        c_real_name = prv_name;
+    } else {
+        c_real_name = get_namespace(env) + c_name;
+    }
+    if (env.find(c_real_name)) {
+        throw exception(sstream() << "invalid definition, a declaration named '" << c_real_name << "' has already been declared");
     }
     if (val && !meta.m_modifiers.m_is_meta && !type_checker(env).is_prop(type)) {
         /* We only abstract nested proofs if the type of the definition is not a proposition */
@@ -260,9 +253,11 @@ declare_definition(parser & p, environment const & env, def_cmd_kind kind, buffe
     bool use_conv_opt = true;
     bool is_trusted   = !meta.m_modifiers.m_is_meta;
     auto def          =
-        !val ? mk_theorem(c_real_name, to_list(lp_names), type, proof) : (kind == Theorem ?
-        mk_theorem(c_real_name, to_list(lp_names), type, *val) :
-        mk_definition(new_env, c_real_name, to_list(lp_names), type, *val, use_conv_opt, is_trusted));
+        !val ? mk_theorem(c_real_name, to_list(lp_names), type, proof) :
+        (kind == decl_cmd_kind::Theorem ?
+         mk_theorem(c_real_name, to_list(lp_names), type, *val) :
+         (is_abbrev ? mk_definition(c_real_name, to_list(lp_names), type, *val, reducibility_hints::mk_abbreviation(), is_trusted) :
+          mk_definition(new_env, c_real_name, to_list(lp_names), type, *val, use_conv_opt, is_trusted)));
     auto cdef         = check(p, new_env, c_name, def, pos);
     new_env           = module::add(new_env, cdef);
 
@@ -361,8 +356,8 @@ static void get_args_for_instantiating_lemma(unsigned arity,
    Then, copy the equation lemmas from d._main to d.
 */
 static environment copy_equation_lemmas(environment const & env, buffer<name> const & d_names) {
-    type_context ctx(env, transparency_mode::All);
-    type_context::tmp_locals locals(ctx);
+    type_context_old ctx(env, transparency_mode::All);
+    type_context_old::tmp_locals locals(ctx);
     level_param_names lps;
     levels ls;
     buffer<expr> vals;
@@ -463,25 +458,24 @@ static environment copy_equation_lemmas(environment const & env, name const & d_
     return copy_equation_lemmas(env, d_names);
 }
 
-static environment mutual_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta const & meta) {
+static environment mutual_definition_cmd_core(parser & p, decl_cmd_kind kind, cmd_meta const & meta) {
     buffer<name> lp_names;
     buffer<expr> fns, params;
     declaration_info_scope scope(p, kind, meta.m_modifiers);
     auto header_pos = p.pos();
     /* TODO(Leo): allow a different doc string for each function in a mutual definition. */
     optional<std::string> doc_string = meta.m_doc_string;
-    expr val = parse_mutual_definition(p, lp_names, fns, params);
-
-    if (meta.m_modifiers.m_is_meta) {
-        throw exception("support for mutual meta definitions has not been implemented yet");
-    }
+    environment env = p.env();
+    private_name_scope prv_scope(meta.m_modifiers.m_is_private, env);
+    buffer<name> prv_names;
+    expr val = parse_mutual_definition(p, lp_names, fns, prv_names, params);
 
     // skip elaboration of definitions during reparsing
     if (p.get_break_at_pos())
         return p.env();
 
     bool recover_from_errors = true;
-    elaborator elab(p.env(), p.get_options(), get_namespace(p.env()) + mlocal_pp_name(fns[0]), metavar_context(), local_context(), recover_from_errors);
+    elaborator elab(env, p.get_options(), get_namespace(env) + mlocal_pp_name(fns[0]), metavar_context(), local_context(), recover_from_errors);
     buffer<expr> new_params;
     elaborate_params(elab, params, new_params);
     val = replace_locals_preserving_pos_info(val, params, new_params);
@@ -492,6 +486,7 @@ static environment mutual_definition_cmd_core(parser & p, def_cmd_kind kind, cmd
         return p.env();
     }
     unsigned num_defs = get_equations_result_size(val);
+    lean_assert(num_defs == prv_names.size());
     lean_assert(fns.size() == num_defs);
     buffer<name> new_d_names;
     /* Define functions */
@@ -502,25 +497,34 @@ static environment mutual_definition_cmd_core(parser & p, def_cmd_kind kind, cmd
         environment env = elab.env();
         name c_name = mlocal_name(fns[i]);
         name c_real_name;
-        std::tie(env, c_real_name) = declare_definition(p, env, kind, lp_names, c_name,
-                                                        curr_type, some_expr(curr), {}, meta, header_pos);
+        bool is_abbrev = false;
+        std::tie(env, c_real_name) = declare_definition(p, env, kind, lp_names, c_name, prv_names[i],
+                                                        curr_type, some_expr(curr), {}, meta, is_abbrev, header_pos);
         env = add_local_ref(p, env, c_name, c_real_name, lp_names, params);
         new_d_names.push_back(c_real_name);
         elab.set_env(env);
     }
     /* Add lemmas */
     elab.set_env(copy_equation_lemmas(elab.env(), new_d_names));
-    /* Apply attributes last */
+    /* Apply attributes last so that they may access any information on the new decl */
     for (auto const & c_real_name : new_d_names) {
         elab.set_env(meta.m_attrs.apply(elab.env(), p.ios(), c_real_name));
     }
     return elab.env();
 }
 
-static expr_pair parse_definition(parser & p, buffer<name> & lp_names, buffer<expr> & params,
-                                  bool is_example, bool is_instance, bool is_meta) {
+/* Return tuple (fn, val, actual_name) where
+
+   - fn is a local constant with the user name + type
+   - val is the actual definition
+   - actual_name for the kernel declaration.
+     Note that mlocal_pp_name(fn) and actual_name are different for scoped/private declarations.
+*/
+static std::tuple<expr, expr, name> parse_definition(parser & p, buffer<name> & lp_names, buffer<expr> & params,
+                                                     bool is_example, bool is_instance, bool is_meta, bool is_abbrev) {
     parser::local_scope scope1(p);
     auto header_pos = p.pos();
+    time_task _("parsing", p.mk_message(header_pos, INFORMATION), p.get_options());
     declaration_name_scope scope2;
     expr fn = parse_single_header(p, scope2, lp_names, params, is_example, is_instance);
     expr val;
@@ -535,11 +539,13 @@ static expr_pair parse_definition(parser & p, buffer<name> & lp_names, buffer<ex
             expr eqn = copy_tag(val, mk_equation(fn, val));
             buffer<expr> eqns;
             eqns.push_back(eqn);
-            val = mk_equations(p, fn, scope2.get_name(), eqns, {}, header_pos);
+            val = mk_equations(p, fn, scope2.get_name(), scope2.get_actual_name(), eqns, {}, header_pos);
         } else {
             val = p.parse_expr();
         }
     } else if (p.curr_is_token(get_bar_tk()) || p.curr_is_token(get_period_tk())) {
+        if (is_abbrev)
+            throw exception("invalid abbreviation, abbreviations should not be defined using pattern matching");
         declaration_name_scope scope2("_main");
         fn = mk_local(mlocal_name(fn), mlocal_pp_name(fn), mlocal_type(fn), mk_rec_info(true));
         p.add_local(fn);
@@ -555,12 +561,12 @@ static expr_pair parse_definition(parser & p, buffer<name> & lp_names, buffer<ex
             check_valid_end_of_equations(p);
         }
         optional<expr> wf_tacs = parse_using_well_founded(p);
-        val = mk_equations(p, fn, scope2.get_name(), eqns, wf_tacs, header_pos);
+        val = mk_equations(p, fn, scope2.get_name(), scope2.get_actual_name(), eqns, wf_tacs, header_pos);
     } else {
         val = p.parser_error_or_expr({"invalid definition, '|' or ':=' expected", p.pos()});
     }
     collect_implicit_locals(p, lp_names, params, {mlocal_type(fn), val});
-    return mk_pair(fn, val);
+    return std::make_tuple(fn, val, scope2.get_actual_name());
 }
 
 static void replace_params(buffer<expr> const & params, buffer<expr> const & new_params, expr & fn, expr & val) {
@@ -579,26 +585,17 @@ static expr_pair elaborate_theorem(elaborator & elab, expr const & fn, expr val)
     return elab.elaborate_with_type(val, mk_as_is(fn_type));
 }
 
-static expr_pair elaborate_definition_core(elaborator & elab, def_cmd_kind kind, expr const & fn, expr const & val) {
-    if (kind == Theorem) {
+static expr_pair elaborate_definition_core(elaborator & elab, decl_cmd_kind kind, expr const & fn, expr const & val) {
+    if (kind == decl_cmd_kind::Theorem) {
         return elaborate_theorem(elab, fn, val);
     } else {
         return elab.elaborate_with_type(val, mlocal_type(fn));
     }
 }
 
-static expr_pair elaborate_definition(parser & p, elaborator & elab, def_cmd_kind kind, expr const & fn, expr const & val, pos_info const & pos) {
-    if (p.profiling()) {
-        xtimeit timer(get_profiling_threshold(p.get_options()), [&](second_duration duration) {
-                auto msg = p.mk_message(pos, INFORMATION);
-                msg.get_text_stream().get_stream()
-                    << "elaboration of " << fn << " took " << display_profiling_time{duration} << "\n";
-                msg.report();
-            });
-        return elaborate_definition_core(elab, kind, fn, val);
-    } else {
-        return elaborate_definition_core(elab, kind, fn, val);
-    }
+static expr_pair elaborate_definition(parser & p, elaborator & elab, decl_cmd_kind kind, expr const & fn, expr const & val, pos_info const & pos) {
+    time_task _("elaboration", p.mk_message(pos, INFORMATION), p.get_options(), mlocal_pp_name(fn));
+    return elaborate_definition_core(elab, kind, fn, val);
 }
 
 static void finalize_theorem_type(elaborator & elab, buffer<expr> const & params, expr & type,
@@ -616,37 +613,6 @@ static void finalize_theorem_proof(elaborator & elab, buffer<expr> const & param
     val  = elab.mk_lambda(params, val);
     val = elab.finalize_theorem_proof(val, info);
     val = unfold_untrusted_macros(elab.env(), val);
-}
-
-struct fix_rec_fn_macro_args_fn : public replace_visitor {
-    buffer<expr> const &             m_params;
-    buffer<pair<name, expr>> const & m_fns;
-
-    fix_rec_fn_macro_args_fn(buffer<expr> const & params, buffer<pair<name, expr>> const & fns):
-        m_params(params), m_fns(fns) {
-    }
-
-    expr fix_rec_fn_macro(name const & fn, expr const & type) {
-        return mk_app(mk_rec_fn_macro(fn, type), m_params);
-    }
-
-    virtual expr visit_macro(expr const & e) override {
-        if (is_rec_fn_macro(e)) {
-            name n = get_rec_fn_name(e);
-            for (unsigned i = 0; i < m_fns.size(); i++) {
-                if (n == m_fns[i].first)
-                    return fix_rec_fn_macro(m_fns[i].first, m_fns[i].second);
-            }
-        }
-        return replace_visitor::visit_macro(e);
-    }
-};
-
-static expr fix_rec_fn_macro_args(elaborator & elab, name const & fn, buffer<expr> const & params, expr const & type, expr const & val) {
-    expr fn_new_type = elab.mk_pi(params, type);
-    buffer<pair<name, expr>> fns;
-    fns.emplace_back(fn, fn_new_type);
-    return fix_rec_fn_macro_args_fn(params, fns)(val);
 }
 
 static expr inline_new_defs(environment const & old_env, environment const & new_env, name const & n, expr const & e) {
@@ -677,7 +643,7 @@ static expr elaborate_proof(
         bool is_rfl_lemma, expr const & final_type,
         metavar_context const & mctx, local_context const & lctx,
         parser_pos_provider pos_provider, bool use_info_manager, std::string const & file_name) {
-    auto tc = std::make_shared<type_context>(decl_env, opts, mctx, lctx);
+    auto tc = std::make_shared<type_context_old>(decl_env, opts, mctx, lctx);
     scope_trace_env scope2(decl_env, opts, *tc);
     scope_traces_as_messages scope2a(file_name, header_pos);
     scope_pos_info_provider scope3(pos_provider);
@@ -688,15 +654,9 @@ static expr elaborate_proof(
         elaborator elab(decl_env, opts, get_namespace(decl_env) + mlocal_pp_name(fn), mctx, lctx, recover_from_errors);
 
         expr val, type;
-        if (get_profiler(opts)) {
-            xtimeit timer(get_profiling_threshold(opts), [&](second_duration duration) {
-                auto msg = message_builder(decl_env, get_global_ios(), file_name, header_pos, INFORMATION);
-                msg.get_text_stream().get_stream()
-                        << "elaboration of " << mlocal_pp_name(fn) << " took " << display_profiling_time{duration} << "\n";
-                msg.report();
-            });
-            std::tie(val, type) = elab.elaborate_with_type(val0, mk_as_is(mlocal_type(fn)));
-        } else {
+        {
+            time_task _("elaboration", message_builder(tc, decl_env, get_global_ios(), file_name, header_pos, INFORMATION),
+                        opts, mlocal_pp_name(fn));
             std::tie(val, type) = elab.elaborate_with_type(val0, mk_as_is(mlocal_type(fn)));
         }
 
@@ -721,8 +681,9 @@ static void check_example(environment const & decl_env, options const & opts,
                           expr const & fn, expr const & val0,
                           metavar_context const & mctx, local_context const & lctx,
                           parser_pos_provider pos_provider, bool use_info_manager, std::string const & file_name) {
-    auto tc = std::make_shared<type_context>(decl_env, opts, mctx, lctx);
+    auto tc = std::make_shared<type_context_old>(decl_env, opts, mctx, lctx);
     scope_trace_env scope2(decl_env, opts, *tc);
+    scope_traces_as_messages scope2a(file_name, pos_provider.get_some_pos());
     scope_pos_info_provider scope3(pos_provider);
     auto_reporting_info_manager_scope scope4(file_name, use_info_manager);
     module::scope_pos_info scope_pos(pos_provider.get_some_pos());
@@ -736,9 +697,6 @@ static void check_example(environment const & decl_env, options const & opts,
         expr val, type;
         std::tie(val, type) = elab.elaborate_with_type(val0, mlocal_type(fn));
         buffer<expr> params_buf; for (auto & p : params) params_buf.push_back(p);
-        if (modifiers.m_is_meta) {
-            val = fix_rec_fn_macro_args(elab, mlocal_name(fn), params_buf, type, val);
-        }
         buffer<name> univ_params_buf; to_buffer(univ_params, univ_params_buf);
         finalize_definition(elab, params_buf, type, val, univ_params_buf, modifiers.m_is_meta);
 
@@ -750,7 +708,7 @@ static void check_example(environment const & decl_env, options const & opts,
         new_env = module::add(new_env, cdef);
         check_noncomputable(noncomputable_theory, new_env, decl_name, def.get_name(), modifiers.m_is_noncomputable,
                                  pos_provider.get_file_name(), pos_provider.get_some_pos());
-    } catch (exception & ex) {
+    } catch (throwable & ex) {
         message_builder error_msg(tc, decl_env, get_global_ios(),
                                   pos_provider.get_file_name(), pos_provider.get_some_pos(),
                                   ERROR);
@@ -764,24 +722,32 @@ static bool is_rfl_preexpr(expr const & e) {
     return is_constant(e, get_rfl_name());
 }
 
-environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta meta) {
+environment single_definition_cmd_core(parser & p, decl_cmd_kind kind, cmd_meta meta) {
     buffer<name> lp_names;
     buffer<expr> params;
     expr fn, val;
     auto header_pos = p.pos();
     module::scope_pos_info scope_pos(header_pos);
     declaration_info_scope scope(p, kind, meta.m_modifiers);
-    bool is_example  = (kind == def_cmd_kind::Example);
-    bool is_instance = (kind == def_cmd_kind::Instance);
-    bool aux_lemmas  = scope.gen_aux_lemmas();
-    bool is_rfl      = false;
+    environment env   = p.env();
+    private_name_scope prv_scope(meta.m_modifiers.m_is_private, env);
+    bool is_example   = (kind == decl_cmd_kind::Example);
+    bool is_instance  = (kind == decl_cmd_kind::Instance);
+    bool is_abbrev    = (kind == decl_cmd_kind::Abbreviation);
+    bool aux_lemmas   = scope.gen_aux_lemmas();
+    bool is_rfl       = false;
     if (is_instance)
-        meta.m_attrs.set_attribute(p.env(), "instance");
-    std::tie(fn, val) = parse_definition(p, lp_names, params, is_example, is_instance, meta.m_modifiers.m_is_meta);
+        meta.m_attrs.set_attribute(env, "instance");
+    if (is_abbrev) {
+        meta.m_attrs.set_attribute(env, "inline");
+        meta.m_attrs.set_attribute(env, "reducible");
+    }
+    name prv_name;
+    std::tie(fn, val, prv_name) = parse_definition(p, lp_names, params, is_example, is_instance, meta.m_modifiers.m_is_meta, is_abbrev);
 
     auto begin_pos = p.cmd_pos();
     auto end_pos = p.pos();
-    scope_log_tree lt(logtree().mk_child({}, (get_namespace(p.env()) + mlocal_pp_name(fn)).to_string(),
+    scope_log_tree lt(logtree().mk_child({}, (get_namespace(env) + mlocal_pp_name(fn)).to_string(),
                                          {logtree().get_location().m_file_name, {begin_pos, end_pos}}));
 
     // skip elaboration of definitions during reparsing
@@ -789,10 +755,10 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
         return p.env();
 
     bool recover_from_errors = true;
-    elaborator elab(p.env(), p.get_options(), get_namespace(p.env()) + mlocal_pp_name(fn), metavar_context(), local_context(), recover_from_errors);
+    elaborator elab(env, p.get_options(), get_namespace(env) + mlocal_pp_name(fn), metavar_context(), local_context(), recover_from_errors);
     buffer<expr> new_params;
     elaborate_params(elab, params, new_params);
-    elab.set_instance_fingerprint();
+    elab.freeze_local_instances();
     replace_params(params, new_params, fn, val);
 
     auto process = [&](expr val) -> environment {
@@ -801,7 +767,7 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
         bool eqns = false;
         name c_name = mlocal_name(fn);
         pair<environment, name> env_n;
-        if (kind == Theorem) {
+        if (kind == decl_cmd_kind::Theorem) {
             is_rfl = is_rfl_preexpr(val);
             type = elab.elaborate_type(mlocal_type(fn));
             elab.ensure_no_unassigned_metavars(type);
@@ -822,15 +788,15 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
                                        new_fn, val, thm_finfo, is_rfl, type,
                                        mctx, lctx, pos_provider, use_info_manager, file_name);
             }), log_tree::ElaborationLevel);
-            env_n = declare_definition(p, elab.env(), kind, lp_names, c_name, type, opt_val, proof, meta, header_pos);
-        } else if (kind == Example) {
+            env_n = declare_definition(p, elab.env(), kind, lp_names, c_name, prv_name, type, opt_val, proof, meta, is_abbrev, header_pos);
+        } else if (kind == decl_cmd_kind::Example) {
             auto env = p.env();
             auto opts = p.get_options();
             auto lp_name_list = to_list(lp_names);
             auto new_params_list = to_list(new_params);
             auto mctx = elab.mctx();
             auto lctx = elab.lctx();
-            auto pos_provider = p.get_parser_pos_provider(header_pos);
+            auto pos_provider = p.get_parser_pos_provider(p.cmd_pos());
             bool use_info_manager = get_global_info_manager() != nullptr;
             bool noncomputable_theory = p.ignore_noncomputable();
             std::string file_name = p.get_file_name();
@@ -843,9 +809,6 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
             return p.env();
         } else {
             std::tie(val, type) = elaborate_definition(p, elab, kind, fn, val, header_pos);
-            if (meta.m_modifiers.m_is_meta) {
-                val = fix_rec_fn_macro_args(elab, mlocal_name(fn), new_params, type, val);
-            }
             eqns = is_equations_result(val);
             if (eqns) {
                 lean_assert(is_equations_result(val));
@@ -853,9 +816,9 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
                 val = get_equations_result(val, 0);
             }
             finalize_definition(elab, new_params, type, val, lp_names, meta.m_modifiers.m_is_meta);
-            env_n = declare_definition(p, elab.env(), kind, lp_names, c_name, type, some_expr(val),
-                                       {}, meta, header_pos);
+            env_n = declare_definition(p, elab.env(), kind, lp_names, c_name, prv_name, type, some_expr(val), {}, meta, is_abbrev, header_pos);
         }
+        time_task _("decl post-processing", p.mk_message(header_pos, INFORMATION), p.get_options(), c_name);
         environment new_env = env_n.first;
         name c_real_name    = env_n.second;
         if (is_rfl) new_env = mark_rfl_lemma(new_env, c_real_name);
@@ -863,11 +826,15 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
         if (eqns && aux_lemmas) {
             new_env = copy_equation_lemmas(new_env, c_real_name);
         }
-        if (!eqns && !meta.m_modifiers.m_is_meta && (kind == Definition || kind == Instance)) {
-            unsigned arity = new_params.size();
-            new_env = mk_simple_equation_lemma_for(new_env, p.get_options(), meta.m_modifiers.m_is_private, c_real_name, arity);
+        if (!meta.m_modifiers.m_is_meta && (kind == decl_cmd_kind::Definition || kind == decl_cmd_kind::Instance)) {
+            if (!eqns) {
+                unsigned arity = new_params.size();
+                new_env = mk_simple_equation_lemma_for(new_env, p.get_options(), meta.m_modifiers.m_is_private, c_name, c_real_name, arity);
+            } else {
+                new_env = mk_smart_unfolding_definition(new_env, p.get_options(), c_real_name);
+            }
         }
-        /* Apply attributes last */
+        /* Apply attributes last so that they may access any information on the new decl */
         return meta.m_attrs.apply(new_env, p.ios(), c_real_name);
     };
 
@@ -876,16 +843,23 @@ environment single_definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta m
     } catch (throwable & ex) {
         // Even though we catch exceptions during elaboration, there can still be other exceptions,
         // e.g. when adding a declaration to the environment.
-        try {
-            auto res = process(p.mk_sorry(header_pos, true));
+
+        // If we have already logged an error during elaboration, don't
+        // bother showing the less helpful kernel exception
+        if (!lt.get().has_entry_now(is_error_message))
             p.mk_message(header_pos, ERROR).set_exception(ex).report();
-            return res;
-        } catch (...) {}
-        throw;
+        // As a last resort, try replacing the definition body with `sorry`.
+        // If that doesn't work either, just silently give up since we have
+        // already logged at least one error.
+        try {
+            return process(p.mk_sorry(header_pos, true));
+        } catch (...) {
+            return env;
+        }
     }
 }
 
-environment definition_cmd_core(parser & p, def_cmd_kind kind, cmd_meta const & meta) {
+environment definition_cmd_core(parser & p, decl_cmd_kind kind, cmd_meta const & meta) {
     if (meta.m_modifiers.m_is_mutual)
         return mutual_definition_cmd_core(p, kind, meta);
     else

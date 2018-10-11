@@ -10,6 +10,7 @@ GSYMS
 GTAGS
 .projectile
 .lean_options
+.vs
 src/emacs/dependencies
 compile_commands.json
 *.idea
@@ -18,3 +19,6 @@ settings.json
 .gdb_history
 .vscode
 /*.nix
+/library/init/version.lean
+CMakeSettings.json
+CppProperties.json

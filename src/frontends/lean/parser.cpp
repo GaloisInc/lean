@@ -63,12 +63,14 @@ Author: Leonardo de Moura
 #include "frontends/lean/prenum.h"
 #include "frontends/lean/elaborator.h"
 #include "frontends/lean/local_context_adapter.h"
+#include "frontends/lean/structure_instance.h"
 
 #ifndef LEAN_DEFAULT_PARSER_SHOW_ERRORS
 #define LEAN_DEFAULT_PARSER_SHOW_ERRORS true
 #endif
 
 namespace lean {
+static name * g_frontend_fresh = nullptr;
 
 void break_at_pos_exception::report_goal_pos(pos_info goal_pos) {
     if (!m_goal_pos)
@@ -150,13 +152,11 @@ parser::error_if_undef_scope::error_if_undef_scope(parser & p):
 parser::all_id_local_scope::all_id_local_scope(parser & p):
     flet<id_behavior>(p.m_id_behavior, id_behavior::AllLocal) {}
 
-static name * g_tmp_prefix = nullptr;
-
 parser::parser(environment const & env, io_state const & ios,
                module_loader const & import_fn,
                std::istream & strm, std::string const & file_name,
                bool use_exceptions) :
-    m_env(env), m_ios(ios),
+    m_env(env), m_ngen(*g_frontend_fresh), m_ios(ios),
     m_use_exceptions(use_exceptions),
     m_import_fn(import_fn),
     m_file_name(file_name),
@@ -1053,6 +1053,10 @@ void parser::parse_binders_core(buffer<expr> & r, parse_binders_config & cfg) {
     bool first = true;
     while (true) {
         if (curr_is_identifier() || curr_is_token(get_placeholder_tk())) {
+            if (cfg.m_explicit_delimiters) {
+                throw parser_error("invalid binder declaration, delimiter/bracket expected (i.e., '(', '{', '[', '{{')",
+                                   pos());
+            }
             /* We only allow the default parameter value syntax for declarations with
                surrounded by () */
             bool new_allow_default = false;
@@ -1402,7 +1406,7 @@ expr parser::parse_notation(parse_table t, expr * left) {
         unsigned idx = 1;
         for (expr & arg : args) {
             actual_args.push_back(arg);
-            arg = mk_local(mk_fresh_name(), x.append_after(idx), mk_expr_placeholder(), binder_info());
+            arg = mk_local(next_name(), x.append_after(idx), mk_expr_placeholder(), binder_info());
             idx++;
         }
     }
@@ -1454,7 +1458,7 @@ expr parser::parse_placeholder() {
 expr parser::parse_anonymous_var_pattern() {
     auto p = pos();
     next();
-    expr t = mk_local(mk_fresh_name(), "_x", mk_expr_placeholder(), binder_info());
+    expr t = mk_local(next_name(), "_x", mk_expr_placeholder(), binder_info());
     return save_pos(t, p);
 }
 
@@ -1500,10 +1504,10 @@ expr parser::parse_led_notation(expr left) {
    5- In a pattern (f a), f must be a constructor or a constant tagged with the
       [pattern] attribute */
 struct to_pattern_fn {
-    parser &       m_parser;
-    buffer<expr> & m_new_locals;
-    name_map<expr> m_locals_map; // local variable name --> its interpretation
-    expr_map<expr> m_anonymous_vars; // for _
+    parser &              m_parser;
+    buffer<expr> &        m_new_locals;
+    name_map<expr>        m_locals_map; // local variable name --> its interpretation
+    expr_map<expr>        m_anonymous_vars; // for _
 
 
     to_pattern_fn(parser & p, buffer<expr> & new_locals):
@@ -1556,6 +1560,22 @@ struct to_pattern_fn {
         }
     }
 
+    void add_new_local(expr const & l) {
+        name const & n = mlocal_pp_name(l);
+        if (!n.is_atomic()) {
+            return m_parser.maybe_throw_error({
+                "invalid pattern: variable, constructor or constant tagged as pattern expected",
+                m_parser.pos_of(l)});
+        }
+        if (m_locals_map.contains(n)) {
+            return m_parser.maybe_throw_error({
+                sstream() << "invalid pattern, '" << n << "' already appeared in this pattern",
+                m_parser.pos_of(l)});
+        }
+        m_locals_map.insert(n, l);
+        m_new_locals.push_back(l);
+    }
+
     void collect_new_local(expr const & e) {
         name const & n = mlocal_pp_name(e);
         bool resolve_only = true;
@@ -1577,18 +1597,7 @@ struct to_pattern_fn {
                 // assume e is a variable shadowing overloaded constants
             }
         }
-        if (!n.is_atomic()) {
-            return m_parser.maybe_throw_error({
-                "invalid pattern: variable, constructor or constant tagged as pattern expected",
-                m_parser.pos_of(e)});
-        }
-        if (m_locals_map.contains(n)) {
-            return m_parser.maybe_throw_error({
-                sstream() << "invalid pattern, '" << n << "' already appeared in this pattern",
-                m_parser.pos_of(e)});
-        }
-        m_locals_map.insert(n, e);
-        m_new_locals.push_back(e);
+        add_new_local(e);
     }
 
     void collect_new_locals(expr const & e, bool skip_main_fn) {
@@ -1599,9 +1608,13 @@ struct to_pattern_fn {
         } else if (is_inaccessible(e)) {
             // do nothing
         } else if (is_placeholder(e)) {
-            expr r = copy_tag(e, mk_local(mk_fresh_name(), "_x", copy_tag(e, mk_expr_placeholder()), binder_info()));
+            expr r = copy_tag(e, mk_local(m_parser.next_name(), "_x", copy_tag(e, mk_expr_placeholder()), binder_info()));
             m_new_locals.push_back(r);
             m_anonymous_vars.insert(mk_pair(e, r));
+        } else if (is_as_pattern(e)) {
+            // skip `collect_new_local`: we assume the lhs to always be a new local
+            add_new_local(get_as_pattern_lhs(e));
+            collect_new_locals(get_as_pattern_rhs(e), false);
         } else if (is_app(e)) {
             collect_new_locals(app_fn(e), skip_main_fn);
             collect_new_locals(app_arg(e), false);
@@ -1623,6 +1636,14 @@ struct to_pattern_fn {
             get_app_args(get_annotation_arg(e), args);
             for (expr const & arg : args)
                 collect_new_locals(arg, skip_main_fn);
+        } else if (is_structure_instance(e)) {
+            auto info = get_structure_instance_info(e);
+            if (info.m_sources.size()) {
+                throw parser_error("invalid occurrence of structure notation source in pattern",
+                                   *get_pos_info(info.m_sources[0]));
+            }
+            for (expr const & val : info.m_field_values)
+                collect_new_locals(val, false);
         } else if (is_annotation(e)) {
             collect_new_locals(get_annotation_arg(e), skip_main_fn);
         } else if (is_constant(e) && is_pattern_constant(const_name(e))) {
@@ -1630,7 +1651,7 @@ struct to_pattern_fn {
         } else {
             return m_parser.maybe_throw_error({
                 "invalid pattern, must be an application, "
-                "constant, variable, type ascription or inaccessible term",
+                "constant, variable, type ascription, aliasing pattern or inaccessible term",
                 m_parser.pos_of(e)});
         }
     }
@@ -1658,6 +1679,9 @@ struct to_pattern_fn {
             return to_expr(e);
         } else if (is_placeholder(e)) {
             return m_anonymous_vars.find(e)->second;
+        } else if (is_as_pattern(e)) {
+            auto new_rhs = visit(get_as_pattern_rhs(e));
+            return copy_tag(e, mk_as_pattern(get_as_pattern_lhs(e), new_rhs));
         } else if (is_app(e)) {
             if (is_inaccessible(app_fn(e))) {
                 return m_parser.parser_error_or_expr({
@@ -1693,6 +1717,12 @@ struct to_pattern_fn {
                 arg = visit(arg);
             expr r = copy_tag(a, mk_app(fn, args));
             return copy_tag(e, mk_anonymous_constructor(r));
+        } else if (is_structure_instance(e)) {
+            auto info = get_structure_instance_info(e);
+            lean_assert(info.m_sources.empty());
+            for (expr & val : info.m_field_values)
+                val = visit(val);
+            return copy_tag(e, mk_structure_instance(info));
         } else if (is_annotation(e)) {
             return copy_tag(e, mk_annotation(get_annotation_kind(e), visit(get_annotation_arg(e))));
         } else if (is_constant(e) && is_pattern_constant(const_name(e))) {
@@ -1751,8 +1781,10 @@ static expr quote(expr const & e) {
 
 /** \brief Elaborate quote in an empty local context. We need to elaborate expr patterns in the parser to find out
     their pattern variables. */
-expr elaborate_quote(expr e, environment const & env, options const & opts) {
+static expr elaborate_quote(parser & p, expr e) {
     lean_assert(is_expr_quote(e));
+    environment const & env = p.env();
+    options const & opts    = p.get_options();
     e = get_expr_quote_value(e);
 
     name x("_x");
@@ -1760,7 +1792,7 @@ expr elaborate_quote(expr e, environment const & env, options const & opts) {
     buffer<expr> aqs;
     e = replace(e, [&](expr const & t, unsigned) {
         if (is_antiquote(t)) {
-            expr local = mk_local(mk_fresh_name(), x.append_after(locals.size() + 1),
+            expr local = mk_local(p.next_name(), x.append_after(locals.size() + 1),
                                   mk_expr_placeholder(), binder_info());
             locals.push_back(local);
             aqs.push_back(t);
@@ -1772,9 +1804,10 @@ expr elaborate_quote(expr e, environment const & env, options const & opts) {
 
     metavar_context ctx;
     local_context lctx;
-    elaborator elab(env, opts, "_elab_quote", ctx, lctx, false, /* in_pattern */ true, /* in_quote */ true);
+    elaborator elab(env, opts, "_elab_quote", ctx, lctx, /* recover_from_errors */ false,
+                    /* in_pattern */ true, /* in_quote */ true);
     e = elab.elaborate(e);
-    e = elab.finalize(e, true, true).first;
+    e = elab.finalize(e, /* check_unassigned */ false, /* to_simple_metavar */ true).first;
 
     expr body = e;
     for (unsigned i = 0; i < aqs.size(); i++)
@@ -1789,7 +1822,7 @@ expr parser::patexpr_to_pattern(expr const & pat_or_expr, bool skip_main_fn, buf
     undef_id_to_local_scope scope(*this);
     auto e = replace(pat_or_expr, [&](expr const & e) {
         if (is_expr_quote(e)) {
-            return some_expr(elaborate_quote(e, env(), get_options()));
+            return some_expr(elaborate_quote(*this, e));
         } else {
             return none_expr();
         }
@@ -2120,10 +2153,12 @@ expr parser::parse_string_expr() {
 expr parser::parse_char_expr() {
     auto p = pos();
     std::string v = get_str_val();
-    lean_assert(v.size() == 1);
+    buffer<unsigned> tmp;
+    utf8_decode(v, tmp);
+    lean_assert(tmp.size() == 1);
     next();
     return mk_app(save_pos(mk_constant(get_char_of_nat_name()), p),
-                  save_pos(mk_prenum(mpz(static_cast<unsigned>(v[0]))), p),
+                  save_pos(mk_prenum(mpz(tmp[0])), p),
                   p);
 }
 
@@ -2134,7 +2169,25 @@ expr parser::parse_nud() {
             return parse_placeholder();
         else
             return parse_nud_notation();
-    case token_kind::Identifier:  return parse_id();
+    case token_kind::Identifier: {
+        auto id_pos = pos();
+        auto id = get_name_val();
+        expr e = parse_id();
+        // if `id` is immediately followed by `@`, parse an as pattern `id@pat`
+        if (in_pattern() && id.is_atomic() && curr_is_token(get_explicit_tk())) {
+            lean_assert(is_local(e));
+            // note: This number is not accurate for an escaped identifier. We should be able to do a better job
+            // in the new backtracking parser.
+            auto id_len = utf8_strlen(id.to_string().c_str());
+            auto p = pos();
+            if (p.first == id_pos.first && p.second == id_pos.second + id_len) {
+                next();
+                auto pat = parse_expr(get_max_prec());
+                return save_pos(mk_as_pattern(e, pat), id_pos);
+            }
+        }
+        return e;
+    }
     case token_kind::Numeral:     return parse_numeral_expr();
     case token_kind::Decimal:     return parse_decimal_expr();
     case token_kind::String:      return parse_string_expr();
@@ -2274,10 +2327,10 @@ expr parser::parse_expr_with_env(local_environment const & lenv, unsigned rbp) {
 class lazy_type_context : public abstract_type_context {
     environment m_env;
     options     m_opts;
-    std::unique_ptr<type_context> m_ctx;
-    type_context & ctx() {
+    std::unique_ptr<type_context_old> m_ctx;
+    type_context_old & ctx() {
         if (!m_ctx)
-            m_ctx.reset(new type_context(m_env, m_opts));
+            m_ctx.reset(new type_context_old(m_env, m_opts));
         return *m_ctx;
     }
 public:
@@ -2289,6 +2342,7 @@ public:
     virtual expr infer(expr const & e) override { return ctx().infer(e); }
     virtual expr check(expr const & e) override { return ctx().check(e); }
     virtual optional<expr> is_stuck(expr const & e) override { return ctx().is_stuck(e); }
+    virtual name next_name() override { return ctx().next_name(); }
 };
 
 void parser::parse_command(cmd_meta const & meta) {
@@ -2297,6 +2351,7 @@ void parser::parse_command(cmd_meta const & meta) {
         maybe_throw_error({"expected command", p});
         return;
     }
+    reset_thread_local();
     m_last_cmd_pos = pos();
     name cmd_name = get_token_info().value();
     m_cmd_token = get_token_info().token();
@@ -2360,23 +2415,16 @@ void parser::parse_imports(unsigned & fingerprint, std::vector<module_name> & im
             try {
                 unsigned h = 0;
                 while (true) {
-                    if (curr_is_token(get_period_tk())) {
+                    if (curr_is_token(get_period_tk()) || curr_is_token(get_dotdot_tk()) ||
+                        curr_is_token(get_ellipsis_tk())) {
+                        unsigned d = get_token_info().token().size();
                         if (!k_init) {
-                            k = 0;
+                            k = d - 1;
                             k_init = true;
+                            h = d - 1;
                         } else {
-                            k = k + 1;
-                            h++;
-                        }
-                        next();
-                    } else if (curr_is_token(get_ellipsis_tk())) {
-                        if (!k_init) {
-                            k = 2;
-                            k_init = true;
-                            h = 2;
-                        } else {
-                            k = k + 3;
-                            h += 3;
+                            k = d;
+                            h = d;
                         }
                         next();
                     } else {
@@ -2537,7 +2585,7 @@ bool parser::curr_is_command_like() const {
 
 std::shared_ptr<snapshot> parser::mk_snapshot() {
     return std::make_shared<snapshot>(
-            m_env, m_local_level_decls, m_local_decls,
+            m_env, m_ngen, m_local_level_decls, m_local_decls,
             m_level_variables, m_variables, m_include_vars,
             m_ios.get_options(), m_imports_parsed, m_ignore_noncomputable, m_parser_scope_stack, m_next_inst_idx, pos());
 }
@@ -2561,12 +2609,12 @@ char const * parser::get_file_name() const {
 }
 
 message_builder parser::mk_message(pos_info const &p, message_severity severity) const {
-    std::shared_ptr<abstract_type_context> tc = std::make_shared<type_context>(env(), get_options());
+    std::shared_ptr<abstract_type_context> tc = std::make_shared<type_context_old>(env(), get_options());
     return message_builder(tc, env(), ios(), get_file_name(), p, severity);
 }
 
 message_builder parser::mk_message(pos_info const & start_pos, pos_info const & end_pos, message_severity severity) const {
-    std::shared_ptr<abstract_type_context> tc = std::make_shared<type_context>(env(), get_options());
+    std::shared_ptr<abstract_type_context> tc = std::make_shared<type_context_old>(env(), get_options());
     message_builder b(tc, env(), ios(), get_file_name(), start_pos, severity);
     b.set_end_pos(end_pos);
     return b;
@@ -2622,14 +2670,15 @@ bool parse_commands(environment & env, io_state & ios, char const * fname) {
 }
 
 void initialize_parser() {
+    g_frontend_fresh         = new name("_ffresh");
+    register_name_generator_prefix(*g_frontend_fresh);
     g_parser_show_errors     = new name{"parser", "show_errors"};
     register_bool_option(*g_parser_show_errors, LEAN_DEFAULT_PARSER_SHOW_ERRORS,
                          "(lean parser) display error messages in the regular output channel");
-    g_tmp_prefix = new name(name::mk_internal_unique_name());
 }
 
 void finalize_parser() {
-    delete g_tmp_prefix;
+    delete g_frontend_fresh;
     delete g_parser_show_errors;
 }
 }

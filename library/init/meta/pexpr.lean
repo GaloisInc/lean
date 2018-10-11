@@ -21,11 +21,13 @@ meta constant pexpr.is_choice_macro : pexpr → bool
 
 /-- Information about unelaborated structure instance expressions. -/
 meta structure structure_instance_info :=
-(struct       : name)
-(source       : option pexpr)
+(struct       : option name := none)
 (field_names  : list name)
 (field_values : list pexpr)
+(sources      : list pexpr := [])
 
+/-- Create a structure instance expression. -/
+meta constant pexpr.mk_structure_instance : structure_instance_info → pexpr
 meta constant pexpr.get_structure_instance_info : pexpr → option structure_instance_info
 
 meta class has_to_pexpr (α : Sort u) :=

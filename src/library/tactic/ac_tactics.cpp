@@ -6,6 +6,7 @@ Author: Leonardo de Moura
 */
 #include <string>
 #include <algorithm>
+#include "kernel/expr_maps.h"
 #include "library/trace.h"
 #include "library/util.h"
 #include "library/reducible.h"
@@ -18,54 +19,34 @@ Author: Leonardo de Moura
 #include "library/tactic/ac_tactics.h"
 
 namespace lean {
-struct ac_manager::cache {
-    environment                     m_env;
-    unsigned                        m_reducibility_fingerprint;
-    unsigned                        m_instance_fingerprint;
-    expr_struct_map<optional<expr>> m_assoc_cache[2];
-    expr_struct_map<optional<expr>> m_comm_cache[2];
+struct ac_manager_old::cache {
+    environment              m_env;
+    expr_map<optional<expr>> m_assoc_cache[2];
+    expr_map<optional<expr>> m_comm_cache[2];
     cache(environment const & env):
-        m_env(env),
-        m_reducibility_fingerprint(get_reducibility_fingerprint(env)),
-        m_instance_fingerprint(get_instance_fingerprint(env)) {}
+        m_env(env) {
+    }
+    void clear() {
+        for (unsigned i = 0; i < 2; i++) {
+            m_assoc_cache[i].clear();
+            m_comm_cache[i].clear();
+        }
+    }
 };
 
-MK_THREAD_LOCAL_GET_DEF(ac_manager::cache_ptr, get_cache_ptr);
-
-static ac_manager::cache_ptr get_cache(environment const & env) {
-    auto & cache_ptr = get_cache_ptr();
-    if (!cache_ptr ||
-        !env.is_descendant(cache_ptr->m_env) ||
-        get_reducibility_fingerprint(env) != cache_ptr->m_reducibility_fingerprint ||
-        get_instance_fingerprint(env)     != cache_ptr->m_instance_fingerprint) {
-        cache_ptr.reset();
-        return std::make_shared<ac_manager::cache>(env);
-    }
-    ac_manager::cache_ptr r = cache_ptr;
-    cache_ptr.reset();
-    r->m_env = env;
-    if (!is_decl_eqp(env, r->m_env)) {
-        /* erase cache for expressions containing locals, since it is probably not useful. */
-        r->m_assoc_cache[1].clear();
-        r->m_comm_cache[1].clear();
-    }
-    return r;
+static ac_manager_old::cache_ptr get_cache(environment const & env) {
+    return std::make_shared<ac_manager_old::cache>(env);
 }
 
-static void recycle_cache(ac_manager::cache_ptr const & cache) {
-    get_cache_ptr() = cache;
-}
-
-ac_manager::ac_manager(type_context & ctx):
+ac_manager_old::ac_manager_old(type_context_old & ctx):
     m_ctx(ctx),
     m_cache_ptr(get_cache(ctx.env())) {
 }
 
-ac_manager::~ac_manager() {
-    recycle_cache(m_cache_ptr);
+ac_manager_old::~ac_manager_old() {
 }
 
-optional<expr> ac_manager::is_assoc(expr const & e) {
+optional<expr> ac_manager_old::is_assoc(expr const & e) {
     auto op = get_binary_op(e);
     if (!op) return none_expr();
     bool idx = has_local(e);
@@ -82,7 +63,7 @@ optional<expr> ac_manager::is_assoc(expr const & e) {
     return r;
 }
 
-optional<expr> ac_manager::is_comm(expr const & e) {
+optional<expr> ac_manager_old::is_comm(expr const & e) {
     auto op = get_binary_op(e);
     if (!op) return none_expr();
     bool idx = has_local(e);
@@ -671,7 +652,7 @@ expr mk_perm_ac_macro(abstract_type_context & ctx, expr const & assoc, expr cons
 
 vm_obj tactic_flat_assoc(vm_obj const & op, vm_obj const & assoc, vm_obj const & e, vm_obj const & s) {
     TRY;
-    type_context ctx   = mk_type_context_for(s);
+    type_context_old ctx   = mk_type_context_for(s);
     pair<expr, expr> p = flat_assoc_fn(ctx, to_expr(op), to_expr(assoc)).flat(to_expr(e));
     return tactic::mk_success(mk_vm_pair(to_obj(p.first), to_obj(p.second)), tactic::to_state(s));
     CATCH;
@@ -679,7 +660,7 @@ vm_obj tactic_flat_assoc(vm_obj const & op, vm_obj const & assoc, vm_obj const &
 
 vm_obj tactic_perm_ac(vm_obj const & op, vm_obj const & assoc, vm_obj const & comm, vm_obj const & e1, vm_obj const & e2, vm_obj const & s) {
     TRY;
-    type_context ctx   = mk_type_context_for(s);
+    type_context_old ctx   = mk_type_context_for(s);
     expr H = perm_ac_fn(ctx, to_expr(op), to_expr(assoc), to_expr(comm)).perm(to_expr(e1), to_expr(e2));
     return tactic::mk_success(to_obj(H), tactic::to_state(s));
     CATCH;

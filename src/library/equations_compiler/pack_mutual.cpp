@@ -7,6 +7,7 @@ Author: Leonardo de Moura
 #include "kernel/instantiate.h"
 #include "library/constants.h"
 #include "library/trace.h"
+#include "library/private.h"
 #include "library/app_builder.h"
 #include "library/type_context.h"
 #include "library/locals.h"
@@ -17,7 +18,7 @@ Author: Leonardo de Moura
 namespace lean {
 #define trace_debug_mutual(Code) lean_trace(name({"debug", "eqn_compiler", "mutual"}), scope_trace_env _scope(m_ctx.env(), m_ctx); Code)
 
-static expr mk_mutual_arg(type_context & ctx, expr const & e, unsigned fidx, unsigned num_fns,
+static expr mk_mutual_arg(type_context_old & ctx, expr const & e, unsigned fidx, unsigned num_fns,
                           expr psum_type, unsigned i) {
     if (i == num_fns - 1) {
         return e;
@@ -35,14 +36,14 @@ static expr mk_mutual_arg(type_context & ctx, expr const & e, unsigned fidx, uns
     }
 }
 
-expr mk_mutual_arg(type_context & ctx, expr const & e, unsigned fidx, unsigned num_fns, expr const & psum_type) {
+expr mk_mutual_arg(type_context_old & ctx, expr const & e, unsigned fidx, unsigned num_fns, expr const & psum_type) {
     return mk_mutual_arg(ctx, e, fidx, num_fns, psum_type, 0);
 }
 
 struct pack_mutual_fn {
-    type_context & m_ctx;
+    type_context_old & m_ctx;
 
-    pack_mutual_fn(type_context & ctx):m_ctx(ctx) {}
+    pack_mutual_fn(type_context_old & ctx):m_ctx(ctx) {}
 
     expr mk_new_domain(buffer<expr> const & domains) {
         unsigned i = domains.size();
@@ -75,7 +76,7 @@ struct pack_mutual_fn {
             /* Add major */
             cases_on = mk_app(cases_on, x);
             /* Add minors */
-            type_context::tmp_locals locals(m_ctx);
+            type_context_old::tmp_locals locals(m_ctx);
             expr y_1 = locals.push_local("_s", args[0]);
             expr m_1 = m_ctx.mk_lambda(y_1, instantiate(codomains[i], y_1));
             expr y_2 = locals.push_local("_s", args[1]);
@@ -90,7 +91,7 @@ struct pack_mutual_fn {
         expr                m_new_fn;
         expr                m_new_domain;
 
-        replace_fns(type_context & ctx, unpack_eqns const & ues, expr const & new_fn):
+        replace_fns(type_context_old & ctx, unpack_eqns const & ues, expr const & new_fn):
             replace_visitor_with_tc(ctx),
             m_ues(ues),
             m_new_fn(new_fn) {
@@ -146,21 +147,27 @@ struct pack_mutual_fn {
               f   : Pi (x : psum A_1 ... (psum A_{n-1} A_n)), psum.cases_on x (fun y, B_1 y) (... (fun y, B_n y) ...)
 
            remark: this module assumes the B_i's are in the same universe. */
-        type_context::tmp_locals locals(m_ctx);
+        type_context_old::tmp_locals locals(m_ctx);
         buffer<expr> domains;
         buffer<expr> codomains;
         level        codomains_lvl;
-        name         new_fn_name("_mutual");
+        equations_header header = get_equations_header(e);
+        name         new_fn_name;
+        name         new_fn_actual_name;
+        if (header.m_is_private) {
+            new_fn_actual_name = *get_private_prefix(m_ctx.env(), head(header.m_fn_actual_names));
+        }
         for (unsigned fidx = 0; fidx < ues.get_num_fns(); fidx++) {
             expr const & fn = ues.get_fn(fidx);
-            new_fn_name = new_fn_name + mlocal_pp_name(fn);
+            new_fn_name        = new_fn_name + mlocal_pp_name(fn);
+            new_fn_actual_name = new_fn_actual_name + mlocal_pp_name(fn);
             lean_assert(ues.get_arity_of(fidx) == 1);
-            expr fn_type    = m_ctx.relaxed_whnf(m_ctx.infer(fn));
+            expr fn_type       = m_ctx.relaxed_whnf(m_ctx.infer(fn));
             lean_assert(is_pi(fn_type));
             domains.push_back(binding_domain(fn_type));
-            expr y          = locals.push_local("_s", binding_domain(fn_type));
-            expr c          = instantiate(binding_body(fn_type), y);
-            level c_lvl     = get_level(m_ctx, c);
+            expr y             = locals.push_local("_s", binding_domain(fn_type));
+            expr c             = instantiate(binding_body(fn_type), y);
+            level c_lvl        = get_level(m_ctx, c);
             if (fidx == 0) {
                 codomains_lvl = c_lvl;
             } else if (!m_ctx.is_def_eq(mk_sort(c_lvl), mk_sort(codomains_lvl))) {
@@ -168,6 +175,9 @@ struct pack_mutual_fn {
             }
             codomains.push_back(binding_body(fn_type));
         }
+
+        new_fn_name = name(new_fn_name, "_mutual");
+        new_fn_actual_name = name(new_fn_actual_name, "_mutual");
 
         expr new_domain   = mk_new_domain(domains);
         expr x            = locals.push_local("_x", new_domain);
@@ -178,8 +188,9 @@ struct pack_mutual_fn {
         trace_debug_mutual(tout() << "new function " << new_fn_name << " : " << new_fn_type << "\n";);
 
         equations_header new_header = get_equations_header(e);
-        new_header.m_fn_names = to_list(new_fn_name);
-        new_header.m_num_fns  = 1;
+        new_header.m_fn_names         = to_list(new_fn_name);
+        new_header.m_fn_actual_names  = to_list(new_fn_actual_name);
+        new_header.m_num_fns          = 1;
 
         replace_fns replacer(m_ctx, ues, new_fn);
 
@@ -207,7 +218,7 @@ struct pack_mutual_fn {
     }
 };
 
-expr pack_mutual(type_context & ctx, expr const & e) {
+expr pack_mutual(type_context_old & ctx, expr const & e) {
     return pack_mutual_fn(ctx)(e);
 }
 

@@ -6,7 +6,7 @@ Authors: Jeremy Avigad
 The order relation on the integers.
 -/
 prelude
-import init.data.int.basic
+import init.data.int.basic init.data.ordering.basic
 
 namespace int
 
@@ -162,27 +162,30 @@ iff.mpr (int.lt_iff_le_and_ne _ _)
 protected lemma mul_nonneg {a b : ℤ} (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤ a * b :=
 le.elim ha (assume n, assume hn,
 le.elim hb (assume m, assume hm,
-  le.intro (show 0 + ↑n * ↑m = a * b, begin rw [← hn, ← hm], repeat {rw zero_add} end)))
+  le.intro (show 0 + ↑n * ↑m = a * b, begin rw [← hn, ← hm], simp [zero_add] end)))
 
 protected lemma mul_pos {a b : ℤ} (ha : 0 < a) (hb : 0 < b) : 0 < a * b :=
 lt.elim ha (assume n, assume hn,
 lt.elim hb (assume m, assume hm,
   lt.intro (show 0 + ↑(nat.succ (nat.succ n * m + n)) = a * b,
-    begin rw [← hn, ← hm], repeat {rw int.coe_nat_zero}, simp,
+    begin rw [← hn, ← hm], simp [int.coe_nat_zero],
           rw [← int.coe_nat_mul], simp [nat.mul_succ, nat.succ_add] end)))
 
 protected lemma zero_lt_one : (0 : ℤ) < 1 := trivial
 
 protected lemma lt_iff_le_not_le {a b : ℤ} : a < b ↔ (a ≤ b ∧ ¬ b ≤ a) :=
 begin
-simp [int.lt_iff_le_and_ne], split; intro h; cases h with hneq hab; split,
-{assumption}, {intro hba, apply hneq, apply int.le_antisymm; assumption},
-{intro heq, apply hab, subst heq, apply int.le_refl}, {assumption}
+simp [int.lt_iff_le_and_ne], split; intro h,
+{ cases h with hab hn, split,
+  { assumption },
+  { intro hba, simp [int.le_antisymm hab hba] at *, contradiction } },
+{ cases h with hab hn, split,
+  { assumption },
+  { intro h, simp [*] at * } }
 end
 
 instance : decidable_linear_ordered_comm_ring int :=
-{ int.comm_ring with
-  le              := int.le,
+{ le              := int.le,
   le_refl         := int.le_refl,
   le_trans        := @int.le_trans,
   le_antisymm     := @int.le_antisymm,
@@ -197,7 +200,8 @@ instance : decidable_linear_ordered_comm_ring int :=
   zero_lt_one     := int.zero_lt_one,
   decidable_eq    := int.decidable_eq,
   decidable_le    := int.decidable_le,
-  decidable_lt    := int.decidable_lt }
+  decidable_lt    := int.decidable_lt,
+  ..int.comm_ring }
 
 instance : decidable_linear_ordered_comm_group int :=
 by apply_instance

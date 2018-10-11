@@ -51,7 +51,7 @@ begin
     rw [show ∀ b, ff && b = ff, by intros; cases b; refl,
         show ∀ b, bxor b ff = b, by intros; cases b; refl] at this,
     rw [← this],
-    cases mod_two_eq_zero_or_one n; rw a; refl
+    cases mod_two_eq_zero_or_one n with h h; rw h; refl
 end
 
 @[simp] lemma div2_zero : div2 0 = 0 := rfl
@@ -60,6 +60,8 @@ end
 
 @[simp] lemma div2_succ (n : ℕ) : div2 (succ n) = cond (bodd n) (succ (div2 n)) (div2 n) :=
 by unfold bodd div2 bodd_div2; cases bodd_div2 n; cases fst; refl
+
+local attribute [simp] add_comm add_assoc add_left_comm mul_comm mul_assoc mul_left_comm
 
 theorem bodd_add_div2 : ∀ n, cond (bodd n) 1 0 + 2 * div2 n = n
 | 0        := rfl
@@ -208,21 +210,23 @@ lemma binary_rec_eq {C : nat → Sort u} {z : C 0} {f : ∀ b n, C n → C (bit 
   binary_rec z f (bit b n) = f b n (binary_rec z f n) :=
 begin
   rw [binary_rec],
-  by_cases (bit b n = 0) with h',
-  {simp [dif_pos h'],
-   generalize : binary_rec._main._pack._proof_1 (bit b n) h' = e,
-   revert e,
-   have bf := bodd_bit b n,
-   have n0 := div2_bit b n,
-   rw h' at bf n0,
-   simp at bf n0,
-   rw [← bf, ← n0, binary_rec_zero],
-   intros, exact h.symm },
-  {simp [dif_neg h'],
-   generalize : binary_rec._main._pack._proof_2 (bit b n) = e,
-   revert e,
-   rw [bodd_bit, div2_bit],
-   intros, refl}
+  with_cases { by_cases bit b n = 0 },
+  case pos : h' {
+    simp [dif_pos h'],
+    generalize : binary_rec._main._pack._proof_1 (bit b n) h' = e,
+    revert e,
+    have bf := bodd_bit b n,
+    have n0 := div2_bit b n,
+    rw h' at bf n0,
+    simp at bf n0,
+    rw [← bf, ← n0, binary_rec_zero],
+    intros, exact h.symm },
+  case neg : h' {
+    simp [dif_neg h'],
+    generalize : binary_rec._main._pack._proof_2 (bit b n) = e,
+    revert e,
+    rw [bodd_bit, div2_bit],
+    intros, refl}
 end
 
 lemma bitwise_bit_aux {f : bool → bool → bool} (h : f ff ff = ff) :
@@ -231,9 +235,9 @@ lemma bitwise_bit_aux {f : bool → bool → bool} (h : f ff ff = ff) :
     (λ b n _, bit (f ff b) (cond (f ff tt) n 0)) =
   λ (n : ℕ), cond (f ff tt) n 0 :=
 begin
-  apply funext, intro n,
+  funext n,
   apply bit_cases_on n, intros b n, rw [binary_rec_eq],
-  { cases b; try {rw h}; ginduction f ff tt with fft; simp [cond]; refl },
+  { cases b; try {rw h}; induction fft : f ff tt; simp [cond]; refl },
   { rw [h, show cond (f ff tt) 0 0 = 0, by cases f ff tt; refl,
            show cond (f tt ff) (bit ff 0) 0 = 0, by cases f tt ff; refl]; refl }
 end
@@ -256,7 +260,7 @@ by rw bitwise_zero_left; cases f ff tt; refl
 begin
   unfold bitwise,
   rw [binary_rec_eq, binary_rec_eq],
-  { ginduction f tt ff with ftf; dsimp [cond],
+  { induction ftf : f tt ff; dsimp [cond],
     rw [show f a ff = ff, by cases a; assumption],
     apply @congr_arg _ _ _ 0 (bit ff), tactic.swap,
     rw [show f a ff = a, by cases a; assumption],
@@ -271,7 +275,7 @@ end
 theorem bitwise_swap {f : bool → bool → bool} (h : f ff ff = ff) :
   bitwise (function.swap f) = function.swap (bitwise f) :=
 begin
-  apply funext, intro m, apply funext,
+  funext m n, revert n,
   dsimp [function.swap],
   apply binary_rec _ (λ a m' IH, _) m; intro n,
   { rw [bitwise_zero_left, bitwise_zero_right], exact h },

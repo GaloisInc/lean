@@ -4,7 +4,6 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Gabriel Ebner
 -/
 import leanpkg.manifest system.io leanpkg.proc leanpkg.git
-variable [io.interface]
 
 namespace leanpkg
 
@@ -33,11 +32,11 @@ end assignment
 instance {α : Type} : has_coe (io α) (solver α) := ⟨state_t.lift⟩
 
 def not_yet_assigned (d : string) : solver bool := do
-assg ← state_t.read,
+assg ← get,
 return $ ¬ assg.contains d
 
 def resolved_path (d : string) : solver string := do
-assg ← state_t.read,
+assg ← get,
 some path ← return (assg.find d) | io.fail "",
 return path
 
@@ -54,30 +53,29 @@ if abs_or_rel.front = '/' then
 else
   base ++ "/" ++ abs_or_rel
 
-def materialize (relpath : string) (dep : dependency) : solver unit :=
+def materialize (relpath : string) (dep : dependency) : solver punit :=
 match dep.src with
 | (source.path dir) := do
   let depdir := resolve_dir dir relpath,
   io.put_str_ln $ dep.name ++ ": using local path " ++ depdir,
-  state_t.modify $ λ assg, assg.insert dep.name depdir
+  modify $ λ assg, assg.insert dep.name depdir
 | (source.git url rev) := do
   let depdir := "_target/deps/" ++ dep.name,
   already_there ← dir_exists depdir,
-  let checkout_action := (do
+  if already_there then do {
+    io.put_str_ln $ dep.name ++ ": trying to update " ++ depdir ++ " to revision " ++ rev,
     hash ← git_parse_origin_revision depdir rev,
-    exec_cmd {cmd := "git", args := ["checkout", "--detach", hash], cwd := depdir}),
-  (do guard already_there,
-      io.put_str_ln $ dep.name ++ ": trying to update " ++ depdir ++ " to revision " ++ rev,
-      checkout_action) <|>
-  (do guard already_there,
-      exec_cmd {cmd := "git", args := ["fetch"], cwd := depdir},
-      checkout_action) <|>
-  (do io.put_str_ln $ dep.name ++ ": cloning " ++ url ++ " to " ++ depdir,
-      exec_cmd {cmd := "rm", args := ["-rf", depdir]},
-      exec_cmd {cmd := "mkdir", args := ["-p", depdir]},
-      exec_cmd {cmd := "git", args := ["clone", url, depdir]},
-      checkout_action),
-  state_t.modify $ λ assg, assg.insert dep.name depdir
+    rev_ex ← git_revision_exists depdir hash,
+    when (¬rev_ex) $
+      exec_cmd {cmd := "git", args := ["fetch"], cwd := depdir}
+  } else do {
+    io.put_str_ln $ dep.name ++ ": cloning " ++ url ++ " to " ++ depdir,
+    exec_cmd {cmd := "mkdir", args := ["-p", depdir]},
+    exec_cmd {cmd := "git", args := ["clone", url, depdir]}
+  },
+  hash ← git_parse_origin_revision depdir rev,
+  exec_cmd {cmd := "git", args := ["checkout", "--detach", hash], cwd := depdir},
+  modify $ λ assg, assg.insert dep.name depdir
 end
 
 def solve_deps_core : ∀ (rel_path : string) (d : manifest) (max_depth : ℕ), solver unit
@@ -87,14 +85,14 @@ deps ← monad.filter (not_yet_assigned ∘ dependency.name) d.dependencies,
 deps.mmap' (materialize relpath),
 deps.mmap' $ λ dep, do
   p ← resolved_path dep.name,
-  d ← manifest.from_file $ p ++ "/" ++ "leanpkg.toml",
-  when (d.name ≠ dep.name) $
-    io.fail $ d.name ++ " (in " ++ relpath ++ ") depends on " ++ d.name ++
+  d' ← manifest.from_file $ p ++ "/" ++ "leanpkg.toml",
+  when (d'.name ≠ dep.name) $
+    io.fail $ d.name ++ " (in " ++ relpath ++ ") depends on " ++ d'.name ++
       ", but resolved dependency has name " ++ dep.name ++ " (in " ++ p ++ ")",
-  solve_deps_core p d max_depth
+  solve_deps_core p d' max_depth
 
 def solve_deps (d : manifest) : io assignment := do
-(_, assg) ← solve_deps_core "." d 1024 $ assignment.empty.insert d.name ".",
+(_, assg) ← (solve_deps_core "." d 1024).run $ assignment.empty.insert d.name ".",
 return assg
 
 def construct_path_core (depname : string) (dirname : string) : io (list string) :=

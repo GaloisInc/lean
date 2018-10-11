@@ -14,10 +14,10 @@ if(${EMSCRIPTEN})
             "#!/bin/sh\nLEAN_PATH=${CMAKE_CURRENT_SOURCE_DIR}/../../library ${NODE_JS} ${CMAKE_CURRENT_BINARY_DIR}/lean.js \"$@\"\n")
     execute_process(COMMAND chmod +x ${CMAKE_CURRENT_BINARY_DIR}/lean_with_path)
 
-    ADD_CUSTOM_COMMAND(TARGET lean
-        POST_BUILD
+    ADD_CUSTOM_TARGET(bin_lean ALL
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${LEAN_SOURCE_DIR}/../bin"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/lean_with_path" "${LEAN_SOURCE_DIR}/../bin/lean"
+        DEPENDS lean
         )
 
     file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/lean
@@ -27,7 +27,7 @@ if(${EMSCRIPTEN})
     # legacy code for mkleanbook
     # copy olean files from the library into build/emscripten/shell/library/...
     add_custom_target(lean_js_library
-        COMMAND rm -rf ${CMAKE_CURRENT_BINARY_DIR}/library
+        COMMAND "${CMAKE_COMMAND}" -E remove_directory ${CMAKE_CURRENT_BINARY_DIR}/library
         COMMAND mkdir -p ${CMAKE_CURRENT_BINARY_DIR}/library
         COMMAND bash -c "(cd ${LEAN_JS_LIBRARY}; tar c `find -name '*.olean'`) | (cd ${CMAKE_CURRENT_BINARY_DIR}/library; tar x)"
         VERBATIM)
@@ -48,16 +48,15 @@ if(${EMSCRIPTEN})
     set_target_properties(lean_js_wasm PROPERTIES LINK_FLAGS "-s WASM=1 ${LEAN_JS_OPTS} -s \"BINARYEN_METHOD='native-wasm'\"")
     set_target_properties(lean_js_js PROPERTIES LINK_FLAGS "${LEAN_JS_OPTS}")
 else()
-  if (${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-    ADD_CUSTOM_COMMAND(TARGET lean
-      POST_BUILD
-      COMMAND rm -f "${LEAN_SOURCE_DIR}/../bin/lean${CMAKE_EXECUTABLE_SUFFIX}"
-      COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/lean${CMAKE_EXECUTABLE_SUFFIX}" "${LEAN_SOURCE_DIR}/../bin/"
+  if (MSVC)
+    ADD_CUSTOM_TARGET(bin_lean ALL
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:lean>" "$<TARGET_FILE_DIR:lean>/mpir.dll" "${LEAN_SOURCE_DIR}/../bin/"
+      DEPENDS lean
     )
   else()
-    ADD_CUSTOM_COMMAND(TARGET lean
-      POST_BUILD
-      COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/lean${CMAKE_EXECUTABLE_SUFFIX}" "${LEAN_SOURCE_DIR}/../bin/"
+    ADD_CUSTOM_TARGET(bin_lean ALL
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:lean>" "${LEAN_SOURCE_DIR}/../bin/"
+      DEPENDS lean
     )
   endif()
 endif()
@@ -121,7 +120,7 @@ endif()
 file(GLOB LEANTESTS "${LEAN_SOURCE_DIR}/../tests/lean/*.lean")
 add_test(NAME leantest_clear_all
         WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean"
-        COMMAND bash -c "rm *.test_suite.out *.status || true")
+        COMMAND "${CMAKE_COMMAND}" -E remove "*.test_suite.out" "*.status")
 set_tests_properties(leantest_clear_all PROPERTIES FIXTURES_SETUP AllFiles)
 
 file(GLOB LEANTESTS "${LEAN_SOURCE_DIR}/../tests/lean/*.lean")
@@ -143,20 +142,11 @@ FOREACH(T ${LEANTESTS})
   endif()
 ENDFOREACH(T)
 
-# SMT2 TESTS
-# file(GLOB SMT2TESTS "${LEAN_SOURCE_DIR}/../tests/lean/smt2/*.smt2")
-# FOREACH(T ${SMT2TESTS})
-#   GET_FILENAME_COMPONENT(T_NAME ${T} NAME)
-#   add_test(NAME "smt2test_${T_NAME}"
-#            WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean/smt2/"
-#            COMMAND bash "./test_single.sh" "${CMAKE_CURRENT_BINARY_DIR}/lean" ${T_NAME})
-# ENDFOREACH(T)
-
 # LEAN RUN TESTS
 file(GLOB LEANRUNTESTS "${LEAN_SOURCE_DIR}/../tests/lean/run/*.lean")
 add_test(NAME leanruntest_clear_all
         WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean/run"
-        COMMAND bash -c "rm *.test_suite.out *.status || true")
+        COMMAND "${CMAKE_COMMAND}" -E remove "*.test_suite.out" "*.status")
 set_tests_properties(leanruntest_clear_all PROPERTIES FIXTURES_SETUP AllFiles)
 
 file(GLOB LEANRUNTESTS "${LEAN_SOURCE_DIR}/../tests/lean/run/*.lean")
@@ -182,7 +172,7 @@ ENDFOREACH(T)
 file(GLOB LEANFAILTESTS "${LEAN_SOURCE_DIR}/../tests/lean/fail/*.lean")
 add_test(NAME leanfailtest_clear_all
         WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean/fail"
-        COMMAND bash -c "rm *.test_suite.out *.status || true")
+        COMMAND "${CMAKE_COMMAND}" -E remove "*.test_suite.out" "*.status")
 set_tests_properties(leanfailtest_clear_all PROPERTIES FIXTURES_SETUP AllFiles)
 add_test(NAME leanfailtest_all
         WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean/fail"
@@ -206,15 +196,19 @@ FOREACH(T ${LEANFAILTESTS})
     endif()
 ENDFOREACH(T)
 
-# SMT2 RUN TESTS
-file(GLOB SMT2RUNTESTS "${LEAN_SOURCE_DIR}/../tests/lean/smt2/run/*.smt2")
-FOREACH(T ${SMT2RUNTESTS})
+# LEANPKG TESTS
+if(NOT (${LEAN_VERSION_IS_RELEASE} EQUAL "1"))
+# Remark: when LEAN_VERSION_IS_RELEASE is 1, one the leanpkg tests fail because the output contains extra information
+file(GLOB LEANPKGTESTS "${LEAN_SOURCE_DIR}/../tests/lean/leanpkg/*.sh")
+FOREACH(T ${LEANPKGTESTS})
   GET_FILENAME_COMPONENT(T_NAME ${T} NAME)
-  add_test(NAME "smt2runtest_${T_NAME}"
-           WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean/smt2/run/"
-           COMMAND bash "./test_single.sh" "${CMAKE_CURRENT_BINARY_DIR}/lean" ${T_NAME})
+  if(NOT T_NAME MATCHES "test_single.sh")
+  add_test(NAME "leanpkgtest_${T_NAME}"
+           WORKING_DIRECTORY "${LEAN_SOURCE_DIR}/../tests/lean/leanpkg/"
+           COMMAND bash "./test_single.sh" "${LEAN_SOURCE_DIR}/../bin/lean" ${T_NAME})
+  endif()
 ENDFOREACH(T)
-
+endif()
 
 # LEAN TESTS using --trust=0
 file(GLOB LEANT0TESTS "${LEAN_SOURCE_DIR}/../tests/lean/trust0/*.lean")

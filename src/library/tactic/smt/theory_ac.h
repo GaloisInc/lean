@@ -89,10 +89,10 @@ public:
     };
 
 private:
-    type_context &       m_ctx;
+    type_context_old &       m_ctx;
     congruence_closure & m_cc;
     state &              m_state;
-    ac_manager           m_ac_manager;
+    ac_manager_old       m_ac_manager;
     buffer<expr_triple>  m_todo;
 
     expr convert(expr const & op, expr const & e, buffer<expr> & args);
@@ -105,7 +105,7 @@ private:
     void erase_R_rhs_occs(expr const & e, expr const & lhs) { erase_R_occs(e, lhs, false); }
     void insert_R_occs(expr const & lhs, expr const & rhs);
     void erase_R_occs(expr const & lhs, expr const & rhs);
-    void compose(expr const & lhs, expr const & rhs, expr const & H);
+    void compose_expr(expr const & lhs, expr const & rhs, expr const & H);
     void collapse(expr const & lhs, expr const & rhs, expr const & H);
     void superpose(expr const & lhs, expr const & rhs, expr const & H);
     expr_pair simplify_core(expr const & e, expr const & lhs, expr const & rhs, expr const & H);

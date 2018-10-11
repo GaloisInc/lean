@@ -4,7 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Leonardo de Moura
 -/
 prelude
-import init.data.option.instances
+import init.data.option.basic
 import init.meta.lean.parser init.meta.tactic init.meta.has_reflect
 
 open lean
@@ -22,10 +22,6 @@ namespace interactive
 inductive loc : Type
 | wildcard : loc
 | ns       : list (option name) → loc
-
-meta instance : has_reflect loc
-| loc.wildcard := `(_)
-| (loc.ns xs)  := `(_)
 
 meta def loc.include_goal : loc → bool
 | loc.wildcard := tt
@@ -62,10 +58,15 @@ meta def list_of (p : parser α) := brackets "[" "]" $ sep_by (skip_info (tk ","
 precedence `⊢` : 0
 precedence `|-` : 0
 
+/-- The right-binding power 2 will terminate expressions by
+    '<|>' (rbp 2), ';' (rbp 1), and ',' (rbp 0). It should be used for any (potentially)
+    trailing expression parameters. -/
+meta def tac_rbp := 2
+
 /-- A 'tactic expression', which uses right-binding power 2 so that it is terminated by
     '<|>' (rbp 2), ';' (rbp 1), and ',' (rbp 0). It should be used for any (potentially)
     trailing expression parameters. -/
-meta def texpr := parser.pexpr 2
+meta def texpr := parser.pexpr tac_rbp
 /-- Parse an identifier or a '_' -/
 meta def ident_ : parser name := ident <|> tk "_" *> return `_
 meta def using_ident := (tk "using" *> ident)?

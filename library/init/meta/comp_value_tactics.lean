@@ -4,7 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Leonardo de Moura
 -/
 prelude
-import init.meta.tactic init.data.option.instances
+import init.meta.tactic init.data.option.basic
 
 meta constant mk_nat_val_ne_proof : expr → expr → option expr
 meta constant mk_nat_val_lt_proof : expr → expr → option expr
@@ -17,7 +17,7 @@ meta constant mk_int_val_ne_proof : expr → expr → option expr
 namespace tactic
 open expr
 meta def comp_val : tactic unit :=
-do t ← target,
+do t ← target >>= instantiate_mvars,
    guard (is_app t),
    type ← infer_type t.app_arg,
    (do is_def_eq type (const `nat []),
@@ -64,4 +64,13 @@ do t ← target,
    <|>
    (do (a, b) ← is_eq t,
         unify a b, to_expr ``(eq.refl %%a) >>= exact)
+end tactic
+
+namespace tactic
+namespace interactive
+/-- Close goals of the form `n ≠ m` when `n` and `m` have type `nat`, `char`, `string`, `int` or `fin sz`,
+    and they are literals. It also closes goals of the form `n < m`, `n > m`, `n ≤ m` and `n ≥ m` for `nat`.
+    If the foal is of the form `n = m`, then it tries to close it using reflexivity. -/
+meta def comp_val := tactic.comp_val
+end interactive
 end tactic

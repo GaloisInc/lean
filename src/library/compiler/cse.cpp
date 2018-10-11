@@ -23,7 +23,7 @@ class cse_fn : public compiler_step_visitor {
 
     class visitor_fn {
     protected:
-        expr_set m_visited;
+        expr_set m_visited; /* do we need this? */
 
         bool check_visited(expr const & e) {
             if (m_visited.find(e) != m_visited.end())
@@ -65,7 +65,7 @@ class cse_fn : public compiler_step_visitor {
 
     class collect_candidates_fn : public visitor_fn {
         environment const & m_env;
-        expr_struct_set m_candidates;
+        expr_set m_candidates;
 
         void add_candidate(expr const & e) {
             if (!closed(e)) return;
@@ -81,8 +81,15 @@ class cse_fn : public compiler_step_visitor {
 
         virtual void visit_app(expr const & e) override {
             if (check_visited(e)) return;
-            add_candidate(e);
             expr const & fn = get_app_fn(e);
+            if (is_internal_cnstr(fn)) {
+                /* Eliminating `_cnstr` applications is problematic because they cannot be curried.
+                  We would have to adjust the replacement logic in `cse_processor::process` to
+                  never replace partial applications of `_cnstr`. Instead, we simply deactivate
+                  CSE for `_cnstr` applications for the time being. (#1968) */
+                return;
+            }
+            add_candidate(e);
             if (is_vm_supported_cases(m_env, fn)) {
                 /* We do not eliminate a common subexpression if it *only* occurs inside of a cases */
                 return;
@@ -94,12 +101,12 @@ class cse_fn : public compiler_step_visitor {
         }
     public:
         collect_candidates_fn(environment const & env):m_env(env) {}
-        expr_struct_set const & get_candidates() const { return m_candidates; }
+        expr_set const & get_candidates() const { return m_candidates; }
     };
 
     class collect_num_occs_fn : public visitor_fn {
-        expr_struct_set const &   m_candidates;
-        expr_struct_map<unsigned> m_num_occs;
+        expr_set const &   m_candidates;
+        expr_map<unsigned> m_num_occs;
 
         void add_occ(expr const & e) {
             if (!closed(e)) return;
@@ -127,12 +134,12 @@ class cse_fn : public compiler_step_visitor {
                 visit(arg);
         }
     public:
-        collect_num_occs_fn(expr_struct_set const & cs):m_candidates(cs) {}
-        expr_struct_map<unsigned> const & get_num_occs() const { return m_num_occs; }
+        collect_num_occs_fn(expr_set const & cs):m_candidates(cs) {}
+        expr_map<unsigned> const & get_num_occs() const { return m_num_occs; }
     };
 
     void collect_common_subexprs(buffer<expr> const & let_values, expr const & body,
-                                 expr_struct_set & r) {
+                                 expr_set & r) {
         /* first pass */
         collect_candidates_fn candidate_collector(m_ctx.env());
         for (expr const & v : let_values) candidate_collector(v);
@@ -149,8 +156,86 @@ class cse_fn : public compiler_step_visitor {
         }
     }
 
+    void collect_common_subexprs(expr const & e, expr_set & r) {
+        buffer<expr> tmp;
+        collect_common_subexprs(tmp, e, r);
+    }
+
+    /* Helper functor for converting common subexpressions into fresh let-decls */
+    struct cse_processor {
+        unsigned &        m_counter;
+        expr_set const &  m_common_subexprs;
+        expr_map<expr>    m_common_subexpr_to_local;
+        type_context_old::tmp_locals m_all_locals; /* new local declarations, it also include let-decls for common-subexprs */
+        local_context const &        m_lctx;
+
+        cse_processor(unsigned & counter, type_context_old & ctx, expr_set const & s):
+            m_counter(counter),
+            m_common_subexprs(s),
+            m_all_locals(ctx),
+            m_lctx(ctx.lctx()) {
+        }
+
+        virtual expr adjust_locals(expr const & v) {
+            return v;
+        }
+
+        expr process(expr const & e, optional<expr> const & main = none_expr()) {
+            expr r = replace(e, [&](expr const & s, unsigned) {
+                    if (main && s == *main) return none_expr();
+                    if (!is_app(s) && !is_macro(s)) return none_expr();
+                    if (!closed(s)) return none_expr();
+                    auto it1 = m_common_subexpr_to_local.find(s);
+                    if (it1 != m_common_subexpr_to_local.end())
+                        return some_expr(it1->second);
+                    if (m_common_subexprs.find(s) == m_common_subexprs.end())
+                        return none_expr();
+                    /* Eliminate common subexpressions nested in s */
+                    expr new_v = process(s, some_expr(s));
+                    name n = name("_c").append_after(m_counter);
+                    m_counter++;
+                    expr l = m_all_locals.push_let(n, mk_neutral_expr(), new_v);
+                    m_common_subexpr_to_local.insert(mk_pair(s, l));
+                    return some_expr(l);
+                });
+            return adjust_locals(r);
+        }
+    };
+
+    /* Similar to cse_processor, but has support for binding exprs (lambda and let) */
+    struct cse_processor_for_binding : public cse_processor {
+        type_context_old::tmp_locals const & m_locals;
+        buffer<expr>                         m_new_locals;
+
+        cse_processor_for_binding(unsigned & counter, type_context_old & ctx, type_context_old::tmp_locals const & locals, expr_set const & s):
+            cse_processor(counter, ctx, s),
+            m_locals(locals) {
+        }
+
+        virtual expr adjust_locals(expr const & v) {
+            return replace_locals(v, m_new_locals.size(), m_locals.data(), m_new_locals.data());
+        }
+
+        void process_locals() {
+            lean_assert(m_new_locals.empty());
+            for (expr const & local : m_locals.as_buffer()) {
+                local_decl decl = m_lctx.get_local_decl(local);
+                if (decl.get_value()) {
+                    /* let-entry */
+                    expr new_v = process(*decl.get_value());
+                    expr l     = m_all_locals.push_let(decl.get_pp_name(), adjust_locals(decl.get_type()), new_v);
+                    m_new_locals.push_back(l);
+            } else {
+                /* lambda-entry */
+                    expr l = m_all_locals.push_local(decl.get_pp_name(), adjust_locals(decl.get_type()), decl.get_info());
+                    m_new_locals.push_back(l);
+                }
+            }
+        }
+    };
+
     expr visit_lambda_let(expr const & e) {
-        type_context::tmp_locals locals(m_ctx);
+        type_context_old::tmp_locals locals(m_ctx);
         expr t = e;
         buffer<expr> let_values;
         while (true) {
@@ -172,59 +257,15 @@ class cse_fn : public compiler_step_visitor {
         t = instantiate_rev(t, locals.size(), locals.data());
         t = visit(t);
 
-        expr_struct_set common_subexprs;
+        expr_set common_subexprs;
         collect_common_subexprs(let_values, t, common_subexprs);
         if (common_subexprs.empty())
             return copy_tag(e, locals.mk_lambda(t));
 
-        expr_struct_map<expr> common_subexpr_to_local;
-        buffer<expr> new_locals;
-        type_context::tmp_locals all_locals(m_ctx); /* new local declarations + let-decls for common-subexprs */
-        local_context const & lctx = m_ctx.lctx();
-
-        std::function<expr(expr const &, optional<expr> const &)>
-        process = [&](expr const & e, optional<expr> const & main) {
-            return replace(e, [&](expr const & s, unsigned) {
-                    if (main && s == *main) return none_expr();
-                    if (!is_app(s) && !is_macro(s)) return none_expr();
-                    if (!closed(s)) return none_expr();
-                    auto it1 = common_subexpr_to_local.find(s);
-                    if (it1 != common_subexpr_to_local.end())
-                        return some_expr(it1->second);
-                    if (common_subexprs.find(s) == common_subexprs.end())
-                        return none_expr();
-                    /* Eliminate common subexpressions nested in s */
-                    expr new_v = process(s, some_expr(s));
-                    new_v      = replace_locals(new_v, new_locals.size(), locals.data(), new_locals.data());
-                    name n = name("_c").append_after(m_counter);
-                    m_counter++;
-                    expr l = all_locals.push_let(n, mk_neutral_expr(), new_v);
-                    common_subexpr_to_local.insert(mk_pair(s, l));
-                    return some_expr(l);
-                });
-        };
-
-        for (expr const & local : locals.as_buffer()) {
-            local_decl decl = lctx.get_local_decl(local);
-            if (decl.get_value()) {
-                /* let-entry */
-                expr new_v = process(*decl.get_value(), none_expr());
-                expr l     = all_locals.push_let(decl.get_pp_name(),
-                                                 replace_locals(decl.get_type(), new_locals.size(), locals.data(), new_locals.data()),
-                                                 replace_locals(new_v, new_locals.size(), locals.data(), new_locals.data()));
-                new_locals.push_back(l);
-            } else {
-                /* lambda-entry */
-                expr l = all_locals.push_local(decl.get_pp_name(),
-                                               replace_locals(decl.get_type(), new_locals.size(), locals.data(), new_locals.data()),
-                                               decl.get_info());
-                new_locals.push_back(l);
-            }
-        }
-
-        expr new_t = process(t, none_expr());
-        new_t = replace_locals(new_t, new_locals.size(), locals.data(), new_locals.data());
-        return copy_tag(e, all_locals.mk_lambda(new_t));
+        cse_processor_for_binding proc(m_counter, m_ctx, locals, common_subexprs);
+        proc.process_locals();
+        expr new_t = proc.process(t);
+        return copy_tag(e, proc.m_all_locals.mk_lambda(new_t));
     }
 
     virtual expr visit_lambda(expr const & e) override {
@@ -235,12 +276,45 @@ class cse_fn : public compiler_step_visitor {
         return visit_lambda_let(e);
     }
 
+    expr visit_cases_on(expr const & e) {
+        buffer<expr> args;
+        expr const & fn = get_app_args(e, args);
+        args[0] = visit(args[0]); // major premise
+        for (unsigned i = 1; i < args.size(); i++) {
+            expr m = args[i];
+            if (is_lambda(m)) {
+                args[i] = visit(m);
+            } else {
+                m = visit(m);
+                expr_set common_subexprs;
+                collect_common_subexprs(m, common_subexprs);
+                if (!common_subexprs.empty()) {
+                    cse_processor proc(m_counter, m_ctx, common_subexprs);
+                    m = proc.process(m);
+                    m = copy_tag(args[i], proc.m_all_locals.mk_lambda(m));
+                }
+                args[i] = m;
+            }
+        }
+        return mk_app(fn, args);
+    }
+
+    virtual expr visit_app(expr const & e) override {
+        expr const & fn = get_app_fn(e);
+        if (is_vm_supported_cases(m_env, fn)) {
+            return visit_cases_on(e);
+        } else {
+            return compiler_step_visitor::visit_app(e);
+        }
+    }
+
 public:
-    cse_fn(environment const & env):compiler_step_visitor(env) {}
+    cse_fn(environment const & env, abstract_context_cache & cache):
+        compiler_step_visitor(env, cache) {}
 };
 
-void cse(environment const & env, buffer<procedure> & procs) {
-    cse_fn fn(env);
+void cse(environment const & env, abstract_context_cache & cache, buffer<procedure> & procs) {
+    cse_fn fn(env, cache);
     for (auto & proc : procs)
         proc.m_code = fn(proc.m_code);
 }

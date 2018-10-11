@@ -14,6 +14,7 @@ Author: Leonardo de Moura
 #include "library/app_builder.h"
 #include "library/inverse.h"
 #include "library/trace.h"
+#include "library/constructions/injective.h"
 #include "library/vm/vm_list.h"
 #include "library/vm/vm_name.h"
 #include "library/vm/vm_expr.h"
@@ -55,11 +56,11 @@ struct cases_tactic_fn {
     declaration                   m_I_decl;
     declaration                   m_cases_on_decl;
 
-    type_context mk_type_context_for(metavar_decl const & g) {
+    type_context_old mk_type_context_for(metavar_decl const & g) {
         return ::lean::mk_type_context_for(m_env, m_opts, m_mctx, g.get_context(), m_mode);
     }
 
-    type_context mk_type_context_for(expr const & mvar) {
+    type_context_old mk_type_context_for(expr const & mvar) {
         return mk_type_context_for(m_mctx.get_metavar_decl(mvar));
     }
 
@@ -76,7 +77,7 @@ struct cases_tactic_fn {
         throw cases_tactic_exception { mk_tactic_state(mvar), [=] { return format(msg); } };
     }
 
-    #define lean_cases_trace(MVAR, CODE) lean_trace(name({"tactic", "cases"}), type_context TMP_CTX = mk_type_context_for(MVAR); scope_trace_env _scope1(m_env, TMP_CTX); CODE)
+    #define lean_cases_trace(MVAR, CODE) lean_trace(name({"tactic", "cases"}), type_context_old TMP_CTX = mk_type_context_for(MVAR); scope_trace_env _scope1(m_env, TMP_CTX); CODE)
 
     void init_inductive_info(name const & n) {
         m_nindices       = get_ginductive_num_indices(m_env, n);
@@ -88,7 +89,7 @@ struct cases_tactic_fn {
         m_cases_on_decl  = m_env.get(get_dep_cases_on(m_env, n));
     }
 
-    expr whnf_inductive(type_context & ctx, expr const & e) {
+    expr whnf_inductive(type_context_old & ctx, expr const & e) {
         if (m_unfold_ginductive)
             return ctx.relaxed_whnf(e);
         else
@@ -108,7 +109,7 @@ struct cases_tactic_fn {
     }
 
     bool is_cases_applicable(expr const & mvar, expr const & H) {
-        type_context ctx = mk_type_context_for(mvar);
+        type_context_old ctx = mk_type_context_for(mvar);
         expr t = whnf_inductive(ctx, ctx.infer(H));
         buffer<expr> args;
         expr const & fn = get_app_args(t, args);
@@ -136,7 +137,7 @@ struct cases_tactic_fn {
         lean_assert(is_local(h));
         if (m_nindices == 0)
             return true;
-        type_context ctx = mk_type_context_for(g);
+        type_context_old ctx = mk_type_context_for(g);
         expr h_type      = whnf_inductive(ctx, ctx.infer(h));
         buffer<expr> args;
         get_app_args(h_type, args);
@@ -163,9 +164,9 @@ struct cases_tactic_fn {
         return ok;
     }
 
-    pair<expr, expr> mk_eq(type_context & ctx, expr const & lhs, expr const & rhs) {
+    pair<expr, expr> mk_eq(type_context_old & ctx, expr const & lhs, expr const & rhs) {
         // make sure we don't assign regular metavars at is_def_eq
-        type_context::tmp_mode_scope scope(ctx);
+        type_context_old::tmp_mode_scope scope(ctx);
         expr lhs_type = ctx.infer(lhs);
         expr rhs_type = ctx.infer(rhs);
         level l       = get_level(ctx, lhs_type);
@@ -196,7 +197,7 @@ struct cases_tactic_fn {
         The original goal is solved if we can solve the produced goal. */
     expr generalize_indices(expr const & mvar, expr const & h, buffer<name> & new_indices_H, unsigned & num_eqs) {
         metavar_decl g     = m_mctx.get_metavar_decl(mvar);
-        type_context ctx   = mk_type_context_for(g);
+        type_context_old ctx   = mk_type_context_for(g);
         expr h_type        = whnf_inductive(ctx, ctx.infer(h));
         buffer<expr> I_args;
         expr const & I     = get_app_args(h_type, I_args);
@@ -232,15 +233,16 @@ struct cases_tactic_fn {
             expr const & index = I_args[i];
             add_eq(index, t);
         }
-        name h_new_name = ctx.lctx().get_unused_name(mlocal_pp_name(h));
+        name h_new_name = mlocal_pp_name(h);
         expr h_new      = ctx.push_local(h_new_name, h_new_type);
         add_eq(h, h_new);
         /* aux_type is  Pi (j' : J) (h' : I A j'), j == j' -> h == h' -> T */
         expr aux_type   = ctx.mk_pi(ts, ctx.mk_pi(h_new, ctx.mk_pi(eqs, g.get_type())));
-        expr aux_mvar   = m_mctx.mk_metavar_decl(g.get_context(), aux_type);
+        expr aux_mvar   = ctx.mk_metavar_decl(g.get_context(), aux_type);
         /* assign mvar := aux_mvar indices h refls */
-        m_mctx.assign(mvar, mk_app(mk_app(mk_app(aux_mvar, m_nindices, I_args.end() - m_nindices), h), refls));
+        ctx.assign(mvar, mk_app(mk_app(mk_app(aux_mvar, m_nindices, I_args.end() - m_nindices), h), refls));
         /* introduce indices j' and h' */
+        m_mctx = ctx.mctx();
         bool use_unused_names = false;
         auto r = intron(m_env, m_opts, m_mctx, aux_mvar, m_nindices + 1, new_indices_H, use_unused_names);
         lean_assert(r);
@@ -309,17 +311,23 @@ struct cases_tactic_fn {
 
     /* Create (f ... x) with the given arity, where the other arguments are inferred using
        type inference */
-    expr mk_inverse(type_context & ctx, inverse_info const & inv, expr const & x) {
+    expr mk_inverse(type_context_old & ctx, inverse_info const & inv, expr const & x) {
         buffer<bool> mask;
         mask.resize(inv.m_arity - 1, false);
         mask.push_back(true);
         return mk_app(ctx, inv.m_inv, mask.size(), mask.data(), &x);
     }
 
-    optional<expr> unify_eqs(expr mvar, unsigned num_eqs, bool updating,
+    optional<expr> unify_eqs(expr const & input_H, expr mvar, unsigned num_eqs, bool updating,
                              list<expr> & new_intros, hsubstitution & subst) {
         if (num_eqs == 0) {
-            lean_cases_trace(mvar, tout() << "solved equalities\n" << pp_goal(mvar) << "\n";);
+            lean_cases_trace(mvar,
+                             tout() << "solved equalities\n" << pp_goal(mvar) << "\n";
+                             tout() << "input hypothesis: " << input_H << "\n";);
+            /* clear input hypothesis */
+            try {
+                mvar = clear(m_mctx, mvar, input_H);
+            } catch (exception&) { /* ignore failure */ }
             return some_expr(mvar);
         }
         expr A, B, lhs, rhs;
@@ -330,15 +338,16 @@ struct cases_tactic_fn {
         expr target          = g.get_type();
         lean_assert(is_pi(target) && is_arrow(target));
         if (is_eq(binding_domain(target), lhs, rhs)) {
-            type_context ctx     = mk_type_context_for(mvar);
-            expr lhs_n = ctx.whnf(lhs);
-            expr rhs_n = ctx.whnf(rhs);
+            type_context_old ctx     = mk_type_context_for(mvar);
+            expr lhs_n = whnf_gintro_rule(ctx, lhs);
+            expr rhs_n = whnf_gintro_rule(ctx, rhs);
             if (lhs != lhs_n || rhs != rhs_n) {
                 expr new_eq     = ::lean::mk_eq(ctx, lhs_n, rhs_n);
                 expr new_target = mk_arrow(new_eq, binding_body(target));
-                expr new_mvar   = m_mctx.mk_metavar_decl(lctx, new_target);
-                m_mctx.assign(mvar, new_mvar);
-                mvar = new_mvar;
+                expr new_mvar   = ctx.mk_metavar_decl(lctx, new_target);
+                ctx.assign(mvar, new_mvar);
+                m_mctx          = ctx.mctx();
+                mvar            = new_mvar;
                 lean_cases_trace(mvar, tout() << "normalize lhs/rhs:\n" << pp_goal(mvar) << "\n";);
             }
         }
@@ -349,7 +358,7 @@ struct cases_tactic_fn {
         local_decl H_decl    = g1.get_context().get_last_local_decl();
         expr H_type          = H_decl.get_type();
         expr H               = H_decl.mk_ref();
-        type_context ctx     = mk_type_context_for(*mvar1);
+        type_context_old ctx     = mk_type_context_for(*mvar1);
         if (is_heq(H_type, A, lhs, B, rhs)) {
             if (!ctx.is_def_eq(A, B)) {
                 throw_exception(mvar, "cases tactic failed, when processing auxiliary heterogeneous equality");
@@ -357,16 +366,17 @@ struct cases_tactic_fn {
             /* Create helper goal mvar2 :  ctx |- lhs = rhs -> type, and assign
                mvar1 := mvar2 (eq_of_heq H) */
             expr new_target = mk_arrow(::lean::mk_eq(ctx, lhs, rhs), g1.get_type());
-            expr mvar2      = m_mctx.mk_metavar_decl(lctx, new_target);
+            expr mvar2      = ctx.mk_metavar_decl(lctx, new_target);
             expr val        = mk_app(mvar2, mk_eq_of_heq(ctx, H));
-            m_mctx.assign(*mvar1, val);
+            ctx.assign(*mvar1, val);
             lean_cases_trace(mvar, tout() << "converted heq => eq\n";);
-            return unify_eqs(mvar2, num_eqs, updating, new_intros, subst);
+            m_mctx = ctx.mctx();
+            return unify_eqs(input_H, mvar2, num_eqs, updating, new_intros, subst);
         } else if (is_eq(H_type, A, lhs, rhs)) {
             if (ctx.is_def_eq(lhs, rhs)) {
                 lean_cases_trace(mvar, tout() << "skip\n";);
                 expr mvar2 = clear(m_mctx, *mvar1, H);
-                return unify_eqs(mvar2, num_eqs - 1, updating, new_intros, subst);
+                return unify_eqs(input_H, mvar2, num_eqs - 1, updating, new_intros, subst);
             } else if (is_local(rhs) || is_local(lhs)) {
                 lean_cases_trace(mvar, tout() << "substitute\n";);
                 hsubstitution extra_subst;
@@ -377,11 +387,16 @@ struct cases_tactic_fn {
                      ctx.lctx().get_local_decl(lhs).get_idx()
                      <
                      ctx.lctx().get_local_decl(rhs).get_idx());
+                if (symm && depends_on(lhs, m_mctx, ctx.lctx(), rhs)) {
+                    throw_exception(mvar, "cases tactic failed, when eliminating equality left-hand-side depends on right-hand-side");
+                } else if (!symm && depends_on(rhs, m_mctx, ctx.lctx(), lhs)) {
+                    throw_exception(mvar, "cases tactic failed, when eliminating equality right-hand-side depends on left-hand-side");
+                }
                 expr mvar2 = ::lean::subst(m_env, m_opts, m_mode, m_mctx, *mvar1, H, symm,
                                            updating ? &extra_subst : nullptr);
                 new_intros = apply(new_intros, extra_subst);
                 subst      = merge(apply(subst, extra_subst), extra_subst);
-                return unify_eqs(mvar2, num_eqs - 1, updating, new_intros, subst);
+                return unify_eqs(input_H, mvar2, num_eqs - 1, updating, new_intros, subst);
             } else if (auto info = invertible(lhs, rhs)) {
                 lean_cases_trace(mvar, tout() << "invertible\n";);
                 /* This branch is mainly used for equalities of the form
@@ -405,28 +420,104 @@ struct cases_tactic_fn {
                     expr mvar2              = m_mctx.mk_metavar_decl(lctx, new_target);
                     expr val                = mk_app(mvar2, lhs_arg_eq_rhs_arg);
                     m_mctx.assign(*mvar1, val);
-                    return unify_eqs(mvar2, num_eqs, updating, new_intros, subst);
+                    return unify_eqs(input_H, mvar2, num_eqs, updating, new_intros, subst);
                 } catch (app_builder_exception & ex) {
                     throw_exception(mvar, "cases tactic failed, unexpected failure when using inverse");
                 }
             } else {
-                optional<name> c1 = is_constructor_app(m_env, lhs);
-                optional<name> c2 = is_constructor_app(m_env, rhs);
-                A = ctx.whnf(A);
-                buffer<expr> A_args;
-                expr const & A_fn   = get_app_args(A, A_args);
-                if (!is_constant(A_fn) || !inductive::is_inductive_decl(m_env, const_name(A_fn)))
-                    throw_ill_formed_datatype();
-                name no_confusion_name(const_name(A_fn), "no_confusion");
-                if (!m_env.find(no_confusion_name)) {
-                    throw exception(sstream() << "cases tactic failed, construction '"
-                                    << no_confusion_name << "' is not available in the environment");
+                optional<name> c1 = is_gintro_rule_app(m_env, lhs);
+                optional<name> c2 = is_gintro_rule_app(m_env, rhs);
+                if (!c1 || !c2) {
+                    auto s = mk_tactic_state(mvar);
+                    throw cases_tactic_exception { s, [=] {
+                            return format("cases tactic failed, unsupported equality between type and constructor indices") + line()
+                                + format("(only equalities between constructors and/or variables are supported, try cases on the indices):") + line()
+                                + s.pp_expr(H_type) + line();
+                        }};
                 }
-                expr target       = g1.get_type();
-                level target_lvl  = get_level(ctx, target);
-                expr no_confusion = mk_app(mk_app(mk_constant(no_confusion_name, cons(target_lvl, const_levels(A_fn))),
-                                                  A_args), target, lhs, rhs, H);
-                if (c1 && c2) {
+
+                if (!is_constructor_app(m_env, lhs) || !is_constructor_app(m_env, rhs)) {
+                    /* lhs or rhs is not a kernel constructor application,
+                       that is, it is a generalized constructor generated by
+                       the inductive compiler. */
+                    if (*c1 == *c2) {
+                        /*
+                          lhs and rhs are of the form (C ...) where C is a generalized constructor.
+                          We use the inj_arrow lemma to break equation into pieces.
+                          We cannot use no_confusion because it would leak the internal encoding
+                          used in the kernel.
+                        */
+                        A = whnf_ginductive(ctx, A);
+                        expr const & A_fn   = get_app_fn(A);
+                        if (!is_constant(A_fn) || !is_ginductive(m_env, const_name(A_fn)))
+                            throw_ill_formed_datatype();
+                        name inj_arrow_name = mk_injective_arrow_name(*c1);
+                        optional<declaration> inj_arrow_decl = m_env.find(inj_arrow_name);
+                        if (!inj_arrow_decl) {
+                            throw exception(sstream() << "cases tactic failed, construction '"
+                                            << inj_arrow_name << "' is not available in the environment");
+                        }
+                        unsigned inj_arrow_arity = get_arity(inj_arrow_decl->get_type());
+                        expr target       = g1.get_type();
+                        if (!ctx.is_prop(target)) {
+                            /* TODO(Leo): refine this limitation.
+                               Actually, we only need to disallow this case if the cases tactic
+                               is being used by the equation compiler.
+                               Reason: we don't have support for inj_arrow in the code that
+                               generate proofs for equational lemmas produced by equational compiler.
+                            */
+                            throw exception(sstream() << "cases tactic failed, target is not a proposition, "
+                                            "dependent elimination is currently not supported in this cases because one of the indices "
+                                            "is an inductive datatype of '" << const_name(A_fn) << "', and this is a nested and/or mutually "
+                                            "recursive datatype");
+                        }
+                        expr inj_arrow = mk_app(ctx, inj_arrow_name, inj_arrow_arity - 1, H, target);
+                        lean_cases_trace(mvar, tout() << "injection\n";);
+                        expr new_target = binding_domain(ctx.whnf(ctx.infer(inj_arrow)));
+                        expr mvar2      = m_mctx.mk_metavar_decl(lctx, new_target);
+                        expr val        = mk_app(inj_arrow, mvar2);
+                        m_mctx.assign(*mvar1, val);
+                        unsigned A_nparams = get_ginductive_num_params(m_env, const_name(A_fn));
+                        lean_assert(get_app_num_args(lhs) >= A_nparams);
+                        return unify_eqs(input_H, mvar2, num_eqs - 1 + get_app_num_args(lhs) - A_nparams,
+                                         updating, new_intros, subst);
+                    } else {
+                        lean_assert(*c1 != *c2);
+                        /*
+                          lhs and rhs are generalized constructor applications, but with different constructors.
+                          Thus, we normalize both of them to make sure we can use no_confusion
+                        */
+                        expr lhs_n = ctx.whnf(lhs);
+                        expr rhs_n = ctx.whnf(rhs);
+                        lean_assert(lhs != lhs_n || rhs != rhs_n);
+                        expr new_eq     = ::lean::mk_eq(ctx, lhs_n, rhs_n);
+                        expr new_target = mk_arrow(new_eq, binding_body(target));
+                        expr new_mvar   = m_mctx.mk_metavar_decl(lctx, new_target);
+                        m_mctx.assign(mvar, new_mvar);
+                        lean_cases_trace(mvar, tout() << "normalize generalized constructors at lhs/rhs:\n" << pp_goal(mvar) << "\n";);
+                        return unify_eqs(input_H, new_mvar, num_eqs, updating, new_intros, subst);
+                    }
+                } else {
+                    /*
+                      lhs and rhs are kernel constructor applications.
+                      We use no_confusion to perform dependent elimination.
+                    */
+                    lean_assert(is_constructor_app(m_env, lhs));
+                    lean_assert(is_constructor_app(m_env, rhs));
+                    A = ctx.whnf(A);
+                    buffer<expr> A_args;
+                    expr const & A_fn   = get_app_args(A, A_args);
+                    if (!is_constant(A_fn) || !inductive::is_inductive_decl(m_env, const_name(A_fn)))
+                        throw_ill_formed_datatype();
+                    name no_confusion_name(const_name(A_fn), "no_confusion");
+                    if (!m_env.find(no_confusion_name)) {
+                        throw exception(sstream() << "cases tactic failed, construction '"
+                                        << no_confusion_name << "' is not available in the environment");
+                    }
+                    expr target       = g1.get_type();
+                    level target_lvl  = get_level(ctx, target);
+                    expr no_confusion = mk_app(mk_app(mk_constant(no_confusion_name, cons(target_lvl, const_levels(A_fn))),
+                                                      A_args), target, lhs, rhs, H);
                     if (*c1 == *c2) {
                         lean_cases_trace(mvar, tout() << "injection\n";);
                         expr new_target = binding_domain(ctx.whnf(ctx.infer(no_confusion)));
@@ -435,29 +526,21 @@ struct cases_tactic_fn {
                         m_mctx.assign(*mvar1, val);
                         unsigned A_nparams = *inductive::get_num_params(m_env, const_name(A_fn));
                         lean_assert(get_app_num_args(lhs) >= A_nparams);
-                        return unify_eqs(mvar2, num_eqs - 1 + get_app_num_args(lhs) - A_nparams,
+                        return unify_eqs(input_H, mvar2, num_eqs - 1 + get_app_num_args(lhs) - A_nparams,
                                          updating, new_intros, subst);
                     } else {
-                        /* conflict, closes the goal */
-                        lean_cases_trace(*mvar1, tout() << "conflicting equality detected, "
-                                         "closing goal using no_confusion\n";);
+                        lean_assert(*c1 != *c2);
                         m_mctx.assign(*mvar1, no_confusion);
                         return none_expr();
                     }
                 }
-                auto s = mk_tactic_state(mvar);
-                throw cases_tactic_exception { s, [=] {
-                        return format("cases tactic failed, unsupported equality between type and constructor indices") + line()
-                            + format("(only equalities between constructors and/or variables are supported, try cases on the indices):") + line()
-                            + s.pp_expr(H_type) + line();
-                    }};
             }
         } else {
             throw_exception(mvar, "cases tactic failed, equality expected");
         }
     }
 
-    pair<list<expr>, list<name>> unify_eqs(list<expr> const & mvars, list<name> const & cnames, unsigned num_eqs,
+    pair<list<expr>, list<name>> unify_eqs(expr const & input_H, list<expr> const & mvars, list<name> const & cnames, unsigned num_eqs,
                                            intros_list * ilist, hsubstitution_list * slist) {
         lean_assert((ilist == nullptr) == (slist == nullptr));
         buffer<expr>              new_goals;
@@ -476,7 +559,7 @@ struct cases_tactic_fn {
                 subst      = head(*it3);
             }
             bool updating = ilist != nullptr;
-            optional<expr> new_mvar = unify_eqs(head(it1), num_eqs, updating, new_intros, subst);
+            optional<expr> new_mvar = unify_eqs(input_H, head(it1), num_eqs, updating, new_intros, subst);
             if (new_mvar) {
                 new_goals.push_back(*new_mvar);
                 new_cnames.push_back(head(itn));
@@ -548,7 +631,7 @@ struct cases_tactic_fn {
             }
             lean_cases_trace(mvar1, tout() << "after eliminating auxiliary indices:";
                              for (auto g : new_goals2) tout() << "\n" << pp_goal(g) << "\n";);
-            return unify_eqs(new_goals2, cname_list, num_eqs, ilist, slist);
+            return unify_eqs(H, new_goals2, cname_list, num_eqs, ilist, slist);
         }
     }
 };

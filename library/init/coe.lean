@@ -146,13 +146,18 @@ instance coe_to_lift {a : Sort u} {b : Sort v} [has_coe_t a b] : has_lift_t a b 
 instance coe_bool_to_Prop : has_coe bool Prop :=
 ⟨λ y, y = tt⟩
 
-instance coe_sort_bool : has_coe_to_sort bool :=
+/- Tactics such as the simplifier only unfold reducible constants when checking whether two terms are definitionally
+   equal or a term is a proposition. The motivation is performance.
+   In particular, when simplifying `p -> q`, the tactic `simp` only visits `p` if it can establish that it is a proposition.
+   Thus, we mark the following instance as @[reducible], otherwise `simp` will not visit `↑p` when simplifying `↑p -> q`.
+-/
+@[reducible] instance coe_sort_bool : has_coe_to_sort bool :=
 ⟨Prop, λ y, y = tt⟩
 
 instance coe_decidable_eq (x : bool) : decidable (coe x) :=
 show decidable (x = tt), from bool.decidable_eq x tt
 
-instance coe_subtype {a : Type u} {p : a → Prop} : has_coe {x // p x} a :=
+instance coe_subtype {a : Sort u} {p : a → Prop} : has_coe {x // p x} a :=
 ⟨subtype.val⟩
 
 /- basic lifts -/

@@ -9,6 +9,7 @@ Author: Leonardo de Moura
 #include "kernel/pos_info_provider.h"
 #include "library/local_context.h"
 #include "library/type_context.h"
+#include "library/context_cache.h"
 #include "library/tactic/tactic_state.h"
 #include "library/tactic/elaborate.h"
 #include "library/tactic/elaborator_exception.h"
@@ -29,6 +30,7 @@ public:
     class checkpoint;
 private:
     friend class validate_and_collect_lhs_mvars;
+    friend class visit_structure_instance_fn;
     typedef std::vector<pair<expr, expr>> to_check_sorts;
     enum class arg_mask {
         AllExplicit /* @ annotation */,
@@ -37,8 +39,9 @@ private:
     };
     environment       m_env;
     options           m_opts;
+    context_cache     m_cache;
     name              m_decl_name;
-    type_context      m_ctx;
+    type_context_old      m_ctx;
     info_manager      m_info;
     unsigned          m_aux_meta_idx = 1;
     bool              m_recover_from_errors;
@@ -115,17 +118,17 @@ private:
     expr try_to_pi(expr const & e) { return m_ctx.try_to_pi(e); }
     bool is_def_eq(expr const & e1, expr const & e2);
     bool try_is_def_eq(expr const & e1, expr const & e2);
-    bool assign_mvar(expr const & e1, expr const & e2) { lean_assert(is_metavar(e1)); return is_def_eq(e1, e2); }
     bool is_uvar_assigned(level const & l) const { return m_ctx.is_assigned(l); }
     bool is_mvar_assigned(expr const & e) const { return m_ctx.is_assigned(e); }
 
-    expr push_local(type_context::tmp_locals & locals, name const & n, expr const & type,
+    expr push_local(type_context_old::tmp_locals & locals, name const & n, expr const & type,
                     binder_info const & binfo, expr const & ref);
-    expr push_let(type_context::tmp_locals & locals,
+    expr push_let(type_context_old::tmp_locals & locals,
                   name const & n, expr const & type, expr const & value, expr const & ref);
 
     level mk_univ_metavar();
     expr mk_metavar(expr const & A, expr const & ref);
+    expr mk_metavar(name const & pp_n, expr const & A, expr const & ref);
     expr mk_type_metavar(expr const & ref);
     expr mk_metavar(optional<expr> const & A, expr const & ref);
     expr mk_instance_core(local_context const & lctx, expr const & C, expr const & ref);
@@ -195,11 +198,13 @@ private:
     expr visit_const_core(expr const & e);
     void save_identifier_info(expr const & f);
     expr visit_function(expr const & fn, bool has_args, optional<expr> const & expected_type, expr const & ref);
-    format mk_app_type_mismatch_error(expr const & t, expr const & arg, expr const & arg_type, expr const & expected_type);
+    [[noreturn]] void throw_app_type_mismatch_error(expr const & t, expr const & arg, expr const & arg_type,
+                                                    expr const & expected_type, expr const & ref);
     format mk_app_arg_mismatch_error(expr const & t, expr const & arg, expr const & expected_arg);
 
     bool is_with_expected_candidate(expr const & fn);
     std::tuple<expr, expr, optional<expr>> elaborate_arg(expr const & arg, expr const & expected_type, expr const & ref);
+    expr post_process_implicit_arg(expr const & arg, expr const & ref);
     struct first_pass_info;
     void first_pass(expr const & fn, buffer<expr> const & args, expr const & expected_type, expr const & ref,
                     first_pass_info & info);
@@ -235,8 +240,6 @@ private:
     expr visit_convoy(expr const & e, optional<expr> const & expected_type);
     bool keep_do_failure_eq(expr const & first_eq);
     expr visit_equations(expr const & e);
-    void check_pattern_inaccessible_annotations(expr const & p);
-    void check_inaccessible_annotations(expr const & lhs);
     expr visit_equation(expr const & eq, unsigned num_fns);
     expr visit_inaccessible(expr const & e, optional<expr> const & expected_type);
 
@@ -258,10 +261,8 @@ private:
     field_resolution field_to_decl(expr const & e, expr const & s, expr const & s_type);
     field_resolution find_field_fn(expr const & e, expr const & s, expr const & s_type);
     expr visit_field(expr const & e, optional<expr> const & expected_type);
-    void assign_field_mvar(name const & S_fname, expr const & mvar,
-                           optional<expr> const & new_new_fval, expr const & new_fval, expr const & new_fval_type,
-                           expr const & expected_type, expr const & ref);
-    expr visit_structure_instance(expr const & e, optional<expr> const & expected_type);
+    expr instantiate_mvars(expr const & e, std::function<bool(expr const &)> pred); // NOLINT
+    expr visit_structure_instance(expr const & e, optional<expr> expected_type);
     expr visit_expr_quote(expr const & e, optional<expr> const & expected_type);
     expr visit(expr const & e, optional<expr> const & expected_type);
 
@@ -295,8 +296,16 @@ public:
                metavar_context const & mctx, local_context const & lctx,
                bool recover_from_errors = true, bool in_pattern = false, bool in_quote = false);
     ~elaborator();
+    abstract_context_cache & get_cache() { return m_cache; }
     metavar_context const & mctx() const { return m_ctx.mctx(); }
     local_context const & lctx() const { return m_ctx.lctx(); }
+    environment const & env() const { return m_env; }
+    options const & get_options() const { return m_opts; }
+    void set_env(environment const & env) {
+        m_env = env;
+        m_ctx.set_env(m_env);
+    }
+
     expr push_local(name const & n, expr const & type, binder_info const & bi = binder_info()) {
         return m_ctx.push_local(n, type, bi);
     }
@@ -304,7 +313,7 @@ public:
     expr mk_lambda(buffer<expr> const & params, expr const & type) { return m_ctx.mk_lambda(params, type); }
     expr infer_type(expr const & e) { return m_ctx.infer(e); }
     expr instantiate_mvars(expr const & e);
-    void set_instance_fingerprint() { m_ctx.set_instance_fingerprint(); }
+    void freeze_local_instances() { m_ctx.freeze_local_instances(); }
     expr elaborate(expr const & e);
     expr elaborate_type(expr const & e);
     expr_pair elaborate_with_type(expr const & e, expr const & e_type);
@@ -335,12 +344,6 @@ public:
     };
     pair<expr, theorem_finalization_info> finalize_theorem_type(expr const & type, buffer<name> & new_lp_names);
     expr finalize_theorem_proof(expr const & val, theorem_finalization_info const & info);
-
-    environment const & env() const { return m_env; }
-    void set_env(environment const & env) {
-        m_env = env;
-        m_ctx.set_env(m_env);
-    }
 
     bool has_errors() const { return m_has_errors; }
 };

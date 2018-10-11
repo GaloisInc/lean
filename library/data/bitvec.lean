@@ -158,6 +158,8 @@ section conversion
   theorem bits_to_nat_to_list {n : ℕ} (x : bitvec n)
   : bitvec.to_nat x = bits_to_nat (vector.to_list x)  := rfl
 
+  local attribute [simp] add_comm add_assoc add_left_comm mul_comm mul_assoc mul_left_comm
+
   theorem to_nat_append {m : ℕ} (xs : bitvec m) (b : bool)
   : bitvec.to_nat (xs ++ₜ b::nil) = bitvec.to_nat xs * 2 + bitvec.to_nat (b::nil) :=
   begin
@@ -169,7 +171,7 @@ section conversion
     simp,
     induction xs with x xs generalizing x,
     { simp, unfold list.foldl add_lsb, simp [nat.mul_succ] },
-    { simp, apply ih_1 }
+    { simp, apply xs_ih }
   end
 
   theorem bits_to_nat_to_bool (n : ℕ)
@@ -188,11 +190,11 @@ section conversion
   : bitvec.to_nat (bitvec.of_nat k n) = n % 2^k :=
   begin
     induction k with k generalizing n,
-    { unfold pow, simp [nat.mod_one], refl },
+    { unfold pow nat.pow, simp [nat.mod_one], refl },
     { have h : 0 < 2, { apply le_succ },
       rw [ of_nat_succ
          , to_nat_append
-         , ih_1
+         , k_ih
          , bits_to_nat_to_bool
          , mod_pow_succ h],
       ac_refl, }

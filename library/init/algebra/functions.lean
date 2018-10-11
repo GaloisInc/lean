@@ -24,7 +24,7 @@ solve1 $ intros
 >> try `[apply le_of_not_le, assumption]
 
 meta def tactic.interactive.min_tac (a b : interactive.parse lean.parser.pexpr) : tactic unit :=
-`[by_cases (%%a ≤ %%b), repeat {min_tac_step}]
+interactive.by_cases (none, ``(%%a ≤ %%b)); min_tac_step
 
 lemma min_le_left (a b : α) : min a b ≤ a :=
 by min_tac a b
@@ -438,7 +438,7 @@ sub_lt_of_abs_sub_lt_left (abs_sub a b ▸ h)
 lemma abs_sub_square (a b : α) : abs (a - b) * abs (a - b) = a * a + b * b - (1 + 1) * a * b :=
 begin
   rw abs_mul_abs_self,
-  simp [left_distrib, right_distrib]
+  simp [left_distrib, right_distrib, add_assoc, add_comm, add_left_comm, mul_comm]
 end
 
 lemma eq_zero_of_mul_self_add_mul_self_eq_zero {x y : α} (h : x * x + y * y = 0) : x = 0 :=
@@ -450,12 +450,11 @@ eq_zero_of_mul_self_eq_zero (le_antisymm this (mul_self_nonneg x))
 lemma abs_abs_sub_abs_le_abs_sub (a b : α) : abs (abs a - abs b) ≤ abs (a - b) :=
 begin
    apply nonneg_le_nonneg_of_squares_le,
-   repeat {apply abs_nonneg},
-   repeat {rw abs_sub_square},
-   repeat {rw abs_abs},
-   repeat {rw abs_mul_abs_self},
+   apply abs_nonneg,
+   iterate {rw abs_sub_square},
+   iterate {rw abs_mul_abs_self},
    apply sub_le_sub_left,
-   repeat {rw mul_assoc},
+   iterate {rw mul_assoc},
    apply mul_le_mul_of_nonneg_left,
    rw [← abs_mul],
    apply le_abs_self,

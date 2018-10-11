@@ -14,7 +14,7 @@ namespace lean {
 vm_obj assert_define_core(bool is_assert, name const & n, expr const & t, tactic_state const & s) {
     optional<metavar_decl> g = s.get_main_goal_decl();
     if (!g) return mk_no_goals_exception(s);
-    type_context ctx     = mk_type_context_for(s);
+    type_context_old ctx     = mk_type_context_for(s);
     if (!is_sort(ctx.whnf(ctx.infer(t)))) {
         format msg("invalid ");
         if (is_assert) msg += format("assert"); else msg += format("define");
@@ -23,21 +23,20 @@ vm_obj assert_define_core(bool is_assert, name const & n, expr const & t, tactic
         return tactic::mk_exception(msg, s);
     }
     local_context lctx   = g->get_context();
-    metavar_context mctx = ctx.mctx();
-    expr new_M_1         = mctx.mk_metavar_decl(lctx, t);
+    expr new_M_1         = ctx.mk_metavar_decl(lctx, t);
     expr new_M_2, new_val;
     if (is_assert) {
         expr new_target  = mk_pi(n, t, g->get_type());
-        new_M_2          = mctx.mk_metavar_decl(lctx, new_target);
+        new_M_2          = ctx.mk_metavar_decl(lctx, new_target);
         new_val          = mk_app(new_M_2, new_M_1);
     } else {
         expr new_target  = mk_let(n, t, new_M_1, g->get_type());
-        new_M_2          = mctx.mk_metavar_decl(lctx, new_target);
+        new_M_2          = ctx.mk_metavar_decl(lctx, new_target);
         new_val          = new_M_2;
     }
-    mctx.assign(head(s.goals()), new_val);
+    ctx.assign(head(s.goals()), new_val);
     list<expr> new_gs    = cons(new_M_1, cons(new_M_2, tail(s.goals())));
-    return tactic::mk_success(set_mctx_goals(s, mctx, new_gs));
+    return tactic::mk_success(set_mctx_goals(s, ctx.mctx(), new_gs));
 }
 
 vm_obj tactic_assert_core(vm_obj const & n, vm_obj const & t, vm_obj const & s) {
@@ -51,7 +50,7 @@ vm_obj tactic_define_core(vm_obj const & n, vm_obj const & t, vm_obj const & s) 
 vm_obj assertv_definev_core(bool is_assert, name const & n, expr const & t, expr const & v, tactic_state const & s) {
     optional<metavar_decl> g = s.get_main_goal_decl();
     if (!g) return mk_no_goals_exception(s);
-    type_context ctx     = mk_type_context_for(s);
+    type_context_old ctx     = mk_type_context_for(s);
     expr v_type          = ctx.infer(v);
     if (!ctx.is_def_eq(t, v_type)) {
         auto thunk = [=]() {
@@ -66,20 +65,19 @@ vm_obj assertv_definev_core(bool is_assert, name const & n, expr const & t, expr
         return tactic::mk_exception(thunk, s);
     }
     local_context lctx   = g->get_context();
-    metavar_context mctx = ctx.mctx();
     expr new_M, new_val;
     if (is_assert) {
         expr new_target  = mk_pi(n, t, g->get_type());
-        new_M            = mctx.mk_metavar_decl(lctx, new_target);
+        new_M            = ctx.mk_metavar_decl(lctx, new_target);
         new_val          = mk_app(new_M, v);
     } else {
         expr new_target  = mk_let(n, t, v, g->get_type());
-        new_M            = mctx.mk_metavar_decl(lctx, new_target);
+        new_M            = ctx.mk_metavar_decl(lctx, new_target);
         new_val          = new_M;
     }
-    mctx.assign(head(s.goals()), new_val);
+    ctx.assign(head(s.goals()), new_val);
     list<expr> new_gs    = cons(new_M, tail(s.goals()));
-    return tactic::mk_success(set_mctx_goals(s, mctx, new_gs));
+    return tactic::mk_success(set_mctx_goals(s, ctx.mctx(), new_gs));
 }
 
 vm_obj tactic_assertv_core(vm_obj const & n, vm_obj const & e, vm_obj const & pr, vm_obj const & s) {

@@ -5,11 +5,14 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Leonardo de Moura
 */
 #include "util/list_fn.h"
+#include "util/fresh_name.h"
+#include "util/sexpr/option_declarations.h"
 #include "kernel/instantiate.h"
 #include "kernel/error_msgs.h"
 #include "library/trace.h"
 #include "library/util.h"
 #include "library/user_recursors.h"
+#include "library/aux_recursors.h"
 #include "library/locals.h"
 #include "library/app_builder.h"
 #include "library/vm/vm_expr.h"
@@ -24,16 +27,42 @@ Author: Leonardo de Moura
 #include "library/tactic/induction_tactic.h"
 
 namespace lean {
+static name * g_induction_concat = nullptr;
+
 [[ noreturn ]] static void throw_ill_formed_recursor_exception(recursor_info const & rec_info) {
     throw exception(sstream() << "induction tactic failed, recursor '" << rec_info.get_name() << "' is ill-formed");
 }
 
-static void set_intron(expr & R, type_context & ctx, expr const & M, unsigned n, list<name> & ns, buffer<name> & new_names, bool use_unused_names) {
+static void set_intron(expr & R, type_context_old & ctx, options const & opts, expr const & M, unsigned n, optional<name> const & prefix, list<name> & ns, buffer<name> & new_names, bool use_unused_names) {
     if (n == 0) {
         R = M;
     } else {
         metavar_context mctx = ctx.mctx();
-        if (auto M1 = intron(ctx.env(), ctx.get_options(), mctx, M, n, ns, new_names, use_unused_names)) {
+        if (auto M1 = intron_core(ctx.env(), opts, mctx, M, n, new_names,
+                                  [&](local_context const & lctx, name const & b_name) -> name {
+                                      if (ns) {
+                                          name r = head(ns);
+                                          ns     = tail(ns);
+                                          if (r != "_")
+                                              return r;
+                                      }
+                                      name r;
+                                      if (prefix) {
+                                          if (n > 1) {
+                                              if (b_name.is_atomic() && b_name.is_string())
+                                                  r = prefix->append_after("_").append_after(b_name.get_string());
+                                              else
+                                                  r = *prefix + b_name;
+                                          } else {
+                                              r = *prefix;
+                                          }
+                                      } else {
+                                          r = b_name;
+                                      }
+                                      if (use_unused_names)
+                                          r = lctx.get_unused_name(r);
+                                      return r;
+                                  })) {
             R = *M1;
             ctx.set_mctx(mctx);
         } else {
@@ -42,12 +71,12 @@ static void set_intron(expr & R, type_context & ctx, expr const & M, unsigned n,
     }
 }
 
-static void set_intron(expr & R, type_context & ctx, expr const & M, unsigned n, buffer<name> & new_names, bool use_unused_names) {
+static void set_intron(expr & R, type_context_old & ctx, options const & opts, expr const & M, unsigned n, buffer<name> & new_names, bool use_unused_names) {
     list<name> tmp;
-    set_intron(R, ctx, M, n, tmp, new_names, use_unused_names);
+    set_intron(R, ctx, opts, M, n, optional<name>(), tmp, new_names, use_unused_names);
 }
 
-static void set_clear(expr & R, type_context & ctx, expr const & M, expr const & H) {
+static void set_clear(expr & R, type_context_old & ctx, expr const & M, expr const & H) {
     try {
         metavar_context mctx = ctx.mctx();
         R = clear(mctx, M, H);
@@ -82,8 +111,8 @@ static void throw_invalid_major_premise_type(unsigned arg_idx, expr const & H_ty
     throw_invalid_major_premise_type(arg_idx, H_type, strm.str().c_str());
 }
 
-static expr whnf_until(type_context & ctx, name const & n, expr const & e) {
-    type_context::transparency_scope scope(ctx, transparency_mode::All);
+static expr whnf_until(type_context_old & ctx, name const & n, expr const & e) {
+    type_context_old::transparency_scope scope(ctx, transparency_mode::All);
     return ctx.whnf_head_pred(e, [&](expr const & t) {
             expr fn = get_app_fn(t);
             if (is_constant(fn) && const_name(fn) == n)
@@ -95,16 +124,22 @@ static expr whnf_until(type_context & ctx, name const & n, expr const & e) {
 
 list<expr> induction(environment const & env, options const & opts, transparency_mode const & m, metavar_context & mctx,
                      expr const & mvar, expr const & H, name const & rec_name, list<name> & ns,
-                     intros_list * ilist, hsubstitution_list * slist) {
+                     intros_list * ilist, hsubstitution_list * slist, buffer<name> & minor_names) {
     lean_assert(is_metavar(mvar));
     lean_assert(is_local(H));
     lean_assert((ilist == nullptr) == (slist == nullptr));
+
     optional<metavar_decl> g = mctx.find_metavar_decl(mvar);
     lean_assert(g);
-
+    optional<name> H_name;
+    if (is_local(H) &&
+        !is_internal_name(mlocal_pp_name(H)) && !is_fresh_name(mlocal_pp_name(H)) &&
+        opts.get_bool(*g_induction_concat, true)) {
+        H_name = mlocal_pp_name(H);
+    }
     recursor_info rec_info = get_recursor_info(env, rec_name);
 
-    type_context ctx1 = mk_type_context_for(env, opts, mctx, g->get_context(), m);
+    type_context_old ctx1 = mk_type_context_for(env, opts, mctx, g->get_context(), m);
     expr H_type = whnf_until(ctx1, rec_info.get_type_name(), ctx1.infer(H));
 
     buffer<expr> H_type_args;
@@ -168,7 +203,7 @@ list<expr> induction(environment const & env, options const & opts, transparency
     }
     optional<metavar_decl> g2 = mctx.find_metavar_decl(*mvar2);
     lean_assert(g2);
-    type_context ctx2   = mk_type_context_for(env, opts, mctx, g2->get_context(), m);
+    type_context_old ctx2   = mk_type_context_for(env, opts, mctx, g2->get_context(), m);
     local_context lctx2 = g2->get_context();
     indices.clear(); /* update indices buffer */
     for (unsigned i = 0; i < indices_H.size() - 1; i++)
@@ -254,6 +289,7 @@ list<expr> induction(environment const & env, options const & opts, transparency
         } else {
             if (!produce_motive)
                 throw_ill_formed_recursor_exception(rec_info);
+            name b_name    = binding_name(rec_type);
             expr new_type  = annotated_head_beta_reduce(binding_domain(rec_type));
             expr rec_arg;
             if (binding_info(rec_type).is_inst_implicit()) {
@@ -263,6 +299,7 @@ list<expr> induction(environment const & env, options const & opts, transparency
                     /* Add new goal if type class inference failed */
                     expr new_goal = ctx2.mk_metavar_decl(lctx2, new_type);
                     new_goals.push_back(new_goal);
+                    minor_names.push_back(b_name);
                     rec_arg = new_goal;
                 }
             } else {
@@ -276,9 +313,9 @@ list<expr> induction(environment const & env, options const & opts, transparency
                 set_clear(aux_M, ctx2, new_M, H2);
                 buffer<name> param_names; buffer<name> extra_names;
                 /* Introduce constructor parameter for new goal associated with minor premise. */
-                set_intron(aux_M, ctx2, aux_M, nparams, ns, param_names, true);
+                set_intron(aux_M, ctx2, opts, aux_M, nparams, H_name, ns, param_names, true);
                 /* Introduce hypothesis that had to be reverted because they depended on indices and/or major premise. */
-                set_intron(aux_M, ctx2, aux_M, nextra, extra_names, false);
+                set_intron(aux_M, ctx2, opts, aux_M, nextra, extra_names, false);
                 local_context aux_M_lctx = ctx2.mctx().get_metavar_decl(aux_M).get_context();
                 if (ilist) {
                     /* Save name of constructor parameters that have been introduced for new goal. */
@@ -297,6 +334,7 @@ list<expr> induction(environment const & env, options const & opts, transparency
                     subst_buffer.push_back(S);
                 }
                 new_goals.push_back(aux_M);
+                minor_names.push_back(b_name);
                 rec_arg = new_M;
             }
             produce_motive = tail(produce_motive);
@@ -318,6 +356,27 @@ list<expr> induction(environment const & env, options const & opts, transparency
     return to_list(new_goals);
 }
 
+list<expr> induction(environment const & env, options const & opts, transparency_mode const & m, metavar_context & mctx,
+                     expr const & mvar, expr const & H, name const & rec_name, list<name> & ns,
+                     intros_list * ilist, hsubstitution_list * slist) {
+    buffer<name> tmp;
+    return induction(env, opts, m, mctx, mvar, H, rec_name, ns, ilist, slist, tmp);
+}
+
+static bool has_one_minor_per_constructor(environment const & env, name const & rec_name) {
+    if (rec_name.is_atomic() || !rec_name.is_string())
+        return false;
+    // kernel recursor and/or generalized inductive
+    if (strcmp(rec_name.get_string(), "rec") == 0 &&
+        is_ginductive(env, rec_name.get_prefix()))
+        return true;
+    // cases_on, dcases_on, rec_on, drec_on
+    if (is_aux_recursor(env, rec_name) &&
+        strcmp(rec_name.get_string(), "brec_on") != 0)
+        return true;
+    return false;
+}
+
 vm_obj induction_tactic_core(transparency_mode const & m, expr const & H, name const & rec_name, list<name> const & ns,
                              tactic_state const & s) {
     if (!s.goals()) return mk_no_goals_exception(s);
@@ -326,12 +385,20 @@ vm_obj induction_tactic_core(transparency_mode const & m, expr const & H, name c
         metavar_context mctx = s.mctx();
         list<name> tmp_ns = ns;
         list<list<expr>> hyps;
+        buffer<name> minor_names;
         hsubstitution_list substs;
         list<expr> new_goals = induction(s.env(), s.get_options(), m, mctx, head(s.goals()), H, rec_name, tmp_ns,
-                                         &hyps, &substs);
+                                         &hyps, &substs, minor_names);
+        if (has_one_minor_per_constructor(s.env(), rec_name)) {
+            /* constructor names to tag new goals */
+            minor_names.clear();
+            to_buffer(get_ginductive_intro_rules(s.env(), rec_name.get_prefix()), minor_names);
+            lean_assert(minor_names.size() == length(new_goals));
+        }
         tactic_state new_s   = set_mctx_goals(s, mctx, append(new_goals, tail(s.goals())));
 
         buffer<vm_obj> info;
+        unsigned i = 0;
         while (!is_nil(hyps)) {
             vm_obj hyps_obj = to_obj(head(hyps));
             buffer<vm_obj> substs_objs;
@@ -339,9 +406,10 @@ vm_obj induction_tactic_core(transparency_mode const & m, expr const & H, name c
                     substs_objs.push_back(mk_vm_pair(to_obj(from), to_obj(to)));
                 });
 
-            info.push_back(mk_vm_pair(hyps_obj, to_obj(substs_objs)));
+            info.push_back(mk_vm_pair(to_obj(minor_names[i]), mk_vm_pair(hyps_obj, to_obj(substs_objs))));
             hyps = tail(hyps);
             substs = tail(substs);
+            i++;
         }
         return tactic::mk_success(to_obj(info), new_s);
     } catch (exception & ex) {
@@ -352,7 +420,7 @@ vm_obj induction_tactic_core(transparency_mode const & m, expr const & H, name c
 vm_obj tactic_induction(vm_obj const & H, vm_obj const & ns, vm_obj const & rec, vm_obj const & m, vm_obj const & s) {
     if (is_none(rec)) {
         try {
-            type_context ctx = mk_type_context_for(s, m);
+            type_context_old ctx = mk_type_context_for(s, m);
             expr type = whnf_ginductive(ctx, ctx.infer(to_expr(H)));
             expr C    = get_app_fn(type);
             if (is_constant(C)) {
@@ -373,8 +441,14 @@ vm_obj tactic_induction(vm_obj const & H, vm_obj const & ns, vm_obj const & rec,
 
 void initialize_induction_tactic() {
     DECLARE_VM_BUILTIN(name({"tactic", "induction"}), tactic_induction);
+
+    g_induction_concat = new name{"tactic", "induction", "concat_names"};
+    register_bool_option(*g_induction_concat, true,
+                         "(induction tactic) if true, `induction` (and `cases`) tactic generate names "
+                         "for constructor fields by concatenating the hypothesis name and the constructor field name");
 }
 
 void finalize_induction_tactic() {
+    delete g_induction_concat;
 }
 }

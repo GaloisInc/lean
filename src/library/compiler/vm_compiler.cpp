@@ -24,15 +24,12 @@ Author: Leonardo de Moura
 #include "library/compiler/preprocess.h"
 #include "library/compiler/comp_irrelevant.h"
 
-/* These are used for loading external native dependencies in the virtual
-   machine.
-*/
-#include "library/native_compiler/extern.h"
-#include "library/native_compiler/used_defs.h"
-
 namespace lean {
+static name * g_vm_compiler_fresh = nullptr;
+
 class vm_compiler_fn {
     environment        m_env;
+    name_generator     m_ngen;
     buffer<vm_instr> & m_code;
 
     void emit(vm_instr const & i) {
@@ -114,20 +111,7 @@ class vm_compiler_fn {
         expr fn = get_app_args(e, args);
         lean_assert(is_constant(fn));
         name const & fn_name = const_name(fn);
-        unsigned num;
-        optional<unsigned> builtin_cases_idx;
-        if (fn_name == get_nat_cases_on_name()) {
-            num = 2;
-        } else {
-            builtin_cases_idx = get_vm_builtin_cases_idx(m_env, fn_name);
-            if (builtin_cases_idx) {
-                name const & I_name = fn_name.get_prefix();
-                num = *inductive::get_num_intro_rules(m_env, I_name);
-            } else {
-                lean_assert(is_internal_cases(fn));
-                num = *is_internal_cases(fn);
-            }
-        }
+        unsigned num = get_vm_supported_cases_num_minors(m_env, fn);
         lean_assert(args.size() == num + 1);
         lean_assert(num >= 1);
         /** compile major premise */
@@ -138,7 +122,7 @@ class vm_compiler_fn {
         cases_args.resize(num, 0);
         if (fn_name == get_nat_cases_on_name()) {
             emit(mk_nat_cases_instr(0, 0));
-        } else if (builtin_cases_idx) {
+        } else if (optional<unsigned> builtin_cases_idx = get_vm_builtin_cases_idx(m_env, fn_name)) {
             #if defined(__GNUC__) && !defined(__CLANG__)
             #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
             #endif
@@ -157,7 +141,7 @@ class vm_compiler_fn {
             name_map<unsigned> new_m = m;
             unsigned new_bpz = bpz;
             while (is_lambda(b)) {
-                name n = mk_fresh_name();
+                name n = m_ngen.next();
                 new_m.insert(n, new_bpz);
                 locals.push_back(mk_local(n));
                 new_bpz++;
@@ -174,7 +158,7 @@ class vm_compiler_fn {
             }
         }
         /* Fix cases instruction pc's */
-        if (num >= 2 || builtin_cases_idx) {
+        if (num >= 2 || get_vm_builtin_cases_idx(m_env, fn_name)) {
             for (unsigned i = 0; i < cases_args.size(); i++)
                 m_code[cases_pos].set_pc(i, cases_args[i]);
         }
@@ -229,8 +213,6 @@ class vm_compiler_fn {
                 emit(mk_sconstructor_instr(0));
             } else if (optional<vm_decl> decl = get_vm_decl(m_env, const_name(fn))) {
                 compile_global(*decl, args.size(), args.data(), bpz, m);
-            } else if (has_extern_attribute(m_env, const_name(fn))) {
-                compile_external(const_name(fn), args, bpz, m);
             } else {
                 throw_unknown_constant(const_name(fn));
             }
@@ -277,7 +259,7 @@ class vm_compiler_fn {
             counter++;
             compile(instantiate_rev(let_value(e), locals.size(), locals.data()), bpz, new_m);
             emit(mk_local_info_instr(bpz, let_name(e), to_type_info(let_type(e))));
-            name n = mk_fresh_name();
+            name n = m_ngen.next();
             new_m.insert(n, bpz);
             locals.push_back(mk_local(n));
             bpz++;
@@ -331,7 +313,7 @@ class vm_compiler_fn {
 
 public:
     vm_compiler_fn(environment const & env, buffer<vm_instr> & code):
-        m_env(env), m_code(code) {}
+        m_env(env), m_ngen(*g_vm_compiler_fresh), m_code(code) {}
 
     pair<unsigned, list<vm_local_info>> operator()(expr e) {
         buffer<expr> locals;
@@ -341,7 +323,7 @@ public:
         name_map<unsigned> m;
         list<vm_local_info> args_info;
         while (is_lambda(e)) {
-            name n = mk_fresh_name();
+            name n = m_ngen.next();
             i--;
             m.insert(n, i);
             locals.push_back(mk_local(n));
@@ -356,36 +338,10 @@ public:
     }
 };
 
-buffer<name> extern_names(environment const & env, buffer<procedure> const & procs) {
-    used_defs live_names(env, [&] (declaration const & d) {
-        live_names.names_in_decl(d);
-    });
-
-    for (auto p : procs) {
-        live_names.names_in_preprocessed_body(p.m_code);
-    }
-
-    buffer<name> extern_ns;
-    live_names.m_used_names.for_each([&] (name const & n) {
-        if (has_extern_attribute(env, n)) {
-            std::cout << "found external to load: " << n << std::endl;
-            extern_ns.push_back(n);
-        }
-    });
-
-    return extern_ns;
-}
-
 static environment vm_compile(environment const & env, buffer<procedure> const & procs, bool optimize_bytecode) {
     environment new_env = env;
     for (auto const & p : procs) {
         new_env = reserve_vm_index(new_env, p.m_name, p.m_code);
-    }
-
-    // Load all the external functions required by this compilation.
-    auto ns = extern_names(env, procs);
-    for (auto n : ns) {
-        new_env = load_external_fn(new_env, n);
     }
 
     for (auto const & p : procs) {
@@ -406,20 +362,48 @@ static environment vm_compile(environment const & env, buffer<procedure> const &
     return new_env;
 }
 
+environment vm_compile(environment const & env, buffer<declaration> const & ds, bool optimize_bytecode) {
+    buffer<procedure> procs;
+    preprocess(env, ds, procs);
+    return vm_compile(env, procs, optimize_bytecode);
+}
+
+static optional<environment> try_reuse_aux_meta_code(environment const & env, name const & d_name) {
+    name aux_name = mk_aux_meta_rec_name(d_name);
+    optional<vm_decl> v_decl = get_vm_decl(env, aux_name);
+    if (!v_decl || !v_decl->is_bytecode())
+        return optional<environment>();
+    /* If we already compiled d_name._meta_aux (which is a meta definition),
+       we reuse the generated code.
+       The goal is to have a predictable runtime cost model for Lean and avoid
+       the overhead generated by the equation compiler when using well founded recursion
+       and structural recursion.
+    */
+    return optional<environment>(add_vm_code(env, d_name, v_decl->get_arity(),
+                                             v_decl->get_code_size(), v_decl->get_code(),
+                                             v_decl->get_args_info(), v_decl->get_pos_info()));
+}
+
 environment vm_compile(environment const & env, declaration const & d, bool optimize_bytecode) {
     if (!d.is_definition() || d.is_theorem() || is_noncomputable(env, d.get_name()) || is_vm_builtin_function(d.get_name()))
         return env;
 
-    buffer<procedure> procs;
-    preprocess(env, d, procs);
-    return vm_compile(env, procs, optimize_bytecode);
+    if (auto new_env = try_reuse_aux_meta_code(env, d.get_name()))
+        return *new_env;
+
+    buffer<declaration> ds;
+    ds.push_back(d);
+    return vm_compile(env, ds, optimize_bytecode);
 }
 
 void initialize_vm_compiler() {
+    g_vm_compiler_fresh = new name ("_vmc_fresh");
+    register_name_generator_prefix(*g_vm_compiler_fresh);
     register_trace_class({"compiler", "optimize_bytecode"});
     register_trace_class({"compiler", "code_gen"});
 }
 
 void finalize_vm_compiler() {
+    delete g_vm_compiler_fresh;
 }
 }

@@ -18,6 +18,7 @@ Author: Leonardo de Moura
 #include "library/util.h"
 #include "library/quote.h"
 #include "library/noncomputable.h"
+#include "library/context_cache.h"
 #include "library/module.h"
 #include "library/vm/vm.h"
 #include "library/compiler/util.h"
@@ -26,7 +27,6 @@ Author: Leonardo de Moura
 #include "library/compiler/comp_irrelevant.h"
 #include "library/compiler/nat_value.h"
 #include "library/compiler/eta_expansion.h"
-#include "library/compiler/simp_pr1_rec.h"
 #include "library/compiler/inliner.h"
 #include "library/compiler/elim_recursors.h"
 #include "library/compiler/erase_irrelevant.h"
@@ -65,7 +65,7 @@ class expand_aux_fn : public compiler_step_visitor {
     expr visit_cases_on(expr const & e) {
         /* Try to reduce cases_on.
            Remark: we only unfold reducible constants. */
-        type_context::transparency_scope scope(ctx(), transparency_mode::Reducible);
+        type_context_old::transparency_scope scope(ctx(), transparency_mode::Reducible);
         if (auto r1 = ctx().reduce_aux_recursor(e)) {
             if (auto r2 = ctx().norm_ext(*r1)) {
                 return compiler_step_visitor::visit(*r2);
@@ -94,8 +94,14 @@ class expand_aux_fn : public compiler_step_visitor {
         return is_constant(e) && is_noncomputable(env(), const_name(e));
     }
 
+    bool is_inline(expr const & e) {
+        return is_constant(e) && ::lean::is_inline(env(), const_name(e));
+    }
+
     bool should_unfold(expr const & e) {
-        return is_not_vm_function(e) && !ctx().is_proof(e) && !is_pack_unpack(e) && !is_noncomputable_const(e);
+        return
+            (is_not_vm_function(e) && !ctx().is_proof(e) && !is_pack_unpack(e) && !is_noncomputable_const(e)) ||
+            (is_inline(e));
     }
 
     expr unfold(expr const & e) {
@@ -107,7 +113,7 @@ class expand_aux_fn : public compiler_step_visitor {
     }
 
     virtual expr visit_constant(expr const & e) override {
-        type_context::nozeta_scope scope(ctx());
+        type_context_old::nozeta_scope scope(ctx());
         if (should_unfold(e))
             return visit(unfold(e));
         else
@@ -115,15 +121,15 @@ class expand_aux_fn : public compiler_step_visitor {
     }
 
     virtual expr visit_app(expr const & e) override {
-        type_context::nozeta_scope scope(ctx());
+        type_context_old::nozeta_scope scope(ctx());
         switch (get_recursor_app_kind(e)) {
         case recursor_kind::NotRecursor: {
             if (should_unfold(e))
                 return visit(unfold(e));
             expr new_e;
             {
-                type_context::transparency_scope scope(ctx(), transparency_mode::Reducible);
-                new_e = copy_tag(e, ctx().whnf_head_pred(e, [&](expr const & e) { return is_macro(e); }));
+                type_context_old::transparency_scope scope(ctx(), transparency_mode::Reducible);
+                new_e = copy_tag(e, ctx().whnf_head_pred(e, [&](expr const &) { return false; }));
             }
             if (is_eqp(new_e, e))
                 return compiler_step_visitor::visit_app(new_e);
@@ -135,8 +141,8 @@ class expand_aux_fn : public compiler_step_visitor {
         case recursor_kind::Aux:
             expr new_e;
             {
-                type_context::transparency_scope scope(ctx(), transparency_mode::Reducible);
-                new_e = copy_tag(e, ctx().whnf_head_pred(e, [&](expr const & e) { return is_aux_recursor(e) || is_macro(e); }));
+                type_context_old::transparency_scope scope(ctx(), transparency_mode::Reducible);
+                new_e = copy_tag(e, ctx().whnf_head_pred(e, [&](expr const & e) { return is_aux_recursor(e); }));
             }
             return compiler_step_visitor::visit(new_e);
         }
@@ -144,17 +150,18 @@ class expand_aux_fn : public compiler_step_visitor {
     }
 
 public:
-    expand_aux_fn(environment const & env):compiler_step_visitor(env) {}
+    expand_aux_fn(environment const & env, abstract_context_cache & cache):compiler_step_visitor(env, cache) {}
 };
 
-static expr expand_aux(environment const & env, expr const & e) {
-    return expand_aux_fn(env)(e);
+static expr expand_aux(environment const & env, abstract_context_cache & cache, expr const & e) {
+    return expand_aux_fn(env, cache)(e);
 }
 
 static name * g_tmp_prefix = nullptr;
 
 class preprocess_fn {
     environment    m_env;
+    context_cache  m_cache;
 
     bool check(declaration const & d, expr const & v) {
         bool memoize      = true;
@@ -174,7 +181,7 @@ class preprocess_fn {
 
     void erase_irrelevant(buffer<procedure> & procs) {
         for (procedure & p : procs) {
-            p.m_code = ::lean::erase_irrelevant(m_env, p.m_code);
+            p.m_code = ::lean::erase_irrelevant(m_env, m_cache, p.m_code);
         }
     }
 
@@ -203,9 +210,9 @@ class preprocess_fn {
        This procedure returns true if type of d is a proposition or return a type,
        and store the dummy code above in */
     bool compile_irrelevant(declaration const & d, buffer<procedure> & procs) {
-        type_context ctx(m_env, transparency_mode::All);
+        type_context_old ctx(m_env, transparency_mode::All);
         expr type = d.get_type();
-        type_context::tmp_locals locals(ctx);
+        type_context_old::tmp_locals locals(ctx);
         while (true) {
             type = ctx.relaxed_whnf(type);
             if (!is_pi(type))
@@ -231,39 +238,38 @@ public:
             return;
         expr v = d.get_value();
         lean_trace(name({"compiler", "input"}), tout() << "\n" << v << "\n";);
-        v = inline_simple_definitions(m_env, v);
+        v = inline_simple_definitions(m_env, m_cache, v);
         lean_cond_assert("compiler", check(d, v));
         lean_trace(name({"compiler", "inline"}), tout() << "\n" << v << "\n";);
-        v = expand_aux(m_env, v);
+        v = expand_aux(m_env, m_cache, v);
         lean_cond_assert("compiler", check(d, v));
         lean_trace(name({"compiler", "expand_aux"}), tout() << "\n" << v << "\n";);
-        v = mark_comp_irrelevant_subterms(m_env, v);
+        v = mark_comp_irrelevant_subterms(m_env, m_cache, v);
         lean_cond_assert("compiler", check(d, v));
         v = find_nat_values(m_env, v);
         lean_cond_assert("compiler", check(d, v));
-        v = eta_expand(m_env, v);
+        v = eta_expand(m_env, m_cache, v);
         lean_cond_assert("compiler", check(d, v));
         lean_trace(name({"compiler", "eta_expansion"}), tout() << "\n" << v << "\n";);
-        v = simp_pr1_rec(m_env, v);
-        lean_cond_assert("compiler", check(d, v));
-        lean_trace(name({"compiler", "simplify_pr1"}), tout() << "\n" << v << "\n";);
-        v = elim_recursors(m_env, d.get_name(), v, procs);
+        v = elim_recursors(m_env, m_cache, d.get_name(), v, procs);
         procs.emplace_back(d.get_name(), get_decl_pos_info(m_env, d.get_name()), v);
         lean_cond_assert("compiler", check(d, procs.back().m_code));
         lean_trace(name({"compiler", "elim_recursors"}), tout() << "\n"; display(procs););
         erase_irrelevant(procs);
         lean_trace(name({"compiler", "erase_irrelevant"}), tout() << "\n"; display(procs););
-        reduce_arity(m_env, procs);
+        reduce_arity(m_env, m_cache, procs);
         lean_trace(name({"compiler", "reduce_arity"}), tout() << "\n"; display(procs););
-        lambda_lifting(m_env, d.get_name(), procs);
+        erase_trivial_structures(m_env, m_cache, procs);
+        lean_trace(name({"compiler", "erase_trivial_structures"}), tout() << "\n"; display(procs););
+        lambda_lifting(m_env, m_cache, d.get_name(), procs);
         lean_trace(name({"compiler", "lambda_lifting"}), tout() << "\n"; display(procs););
-        simp_inductive(m_env, procs);
+        simp_inductive(m_env, m_cache, procs);
         lean_trace(name({"compiler", "simplify_inductive"}), tout() << "\n"; display(procs););
-        elim_unused_lets(m_env, procs);
+        elim_unused_lets(m_env, m_cache, procs);
         lean_trace(name({"compiler", "elim_unused_lets"}), tout() << "\n"; display(procs););
-        extract_values(m_env, d.get_name(), procs);
+        extract_values(m_env, m_cache, d.get_name(), procs);
         lean_trace(name({"compiler", "extract_values"}), tout() << "\n"; display(procs););
-        cse(m_env, procs);
+        cse(m_env, m_cache, procs);
         lean_trace(name({"compiler", "cse"}), tout() << "\n"; display(procs););
         lean_trace(name({"compiler", "preprocess"}), tout() << "\n"; display(procs););
     }
@@ -271,6 +277,14 @@ public:
 
 void preprocess(environment const & env, declaration const & d, buffer<procedure> & result) {
     return preprocess_fn(env)(d, result);
+}
+
+void preprocess(environment const & env, buffer<declaration> const & ds, buffer<procedure> & result) {
+    for (declaration const & d : ds) {
+        buffer<procedure> procs;
+        preprocess(env, d, procs);
+        result.append(procs);
+    }
 }
 
 void initialize_preprocess() {
@@ -283,6 +297,7 @@ void initialize_preprocess() {
     register_trace_class({"compiler", "elim_recursors"});
     register_trace_class({"compiler", "erase_irrelevant"});
     register_trace_class({"compiler", "reduce_arity"});
+    register_trace_class({"compiler", "erase_trivial_structures"});
     register_trace_class({"compiler", "lambda_lifting"});
     register_trace_class({"compiler", "simplify_inductive"});
     register_trace_class({"compiler", "elim_unused_lets"});

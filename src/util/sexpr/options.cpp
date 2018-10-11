@@ -139,9 +139,9 @@ char const * options::get_string(char const * n, char const * default_value) con
     return !is_nil(r) && is_string(r) ? to_string(r).c_str() : default_value;
 }
 
-static char const * g_left_angle_bracket  = "\u27E8";
-static char const * g_right_angle_bracket = "\u27E9";
-static char const * g_arrow               = "\u21a6";
+static char const * g_left_angle_bracket  = "⟨";
+static char const * g_right_angle_bracket = "⟩";
+static char const * g_arrow               = "↦";
 static char const * g_assign              = ":=";
 
 options options::update(name const & n, sexpr const & v) const {

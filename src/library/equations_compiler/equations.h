@@ -30,9 +30,17 @@ bool is_lambda_no_equation(expr const & e);
 expr mk_inaccessible(expr const & e);
 bool is_inaccessible(expr const & e);
 
+/** \brief Construct the "as pattern" <tt>lhs@rhs</tt> */
+expr mk_as_pattern(expr const & lhs, expr const & rhs);
+bool is_as_pattern(expr const & e);
+expr get_as_pattern_lhs(expr const & e);
+expr get_as_pattern_rhs(expr const & e);
+
+
 struct equations_header {
     unsigned   m_num_fns{0};              /* number of functions being defined */
-    list<name> m_fn_names;                /* names for functions */
+    list<name> m_fn_names;                /* local names for functions */
+    list<name> m_fn_actual_names;         /* Full qualified name and/or private name */
     bool       m_is_private{false};       /* if true, it must be a private definition */
     bool       m_is_lemma{false};         /* if true, equations are defining a lemma */
     bool       m_is_meta{false};          /* the auxiliary declarations should be tagged as meta */
@@ -41,6 +49,7 @@ struct equations_header {
     /* m_prev_errors is true when errors have already being found processing the file,
        and we should minimize error reporting */
     bool       m_prev_errors{false};
+    bool       m_gen_code{true};          /* if true, generate byte code for recursive equations */
     equations_header() {}
     equations_header(unsigned num_fns):m_num_fns(num_fns) {}
 };
@@ -52,6 +61,7 @@ expr mk_equations(equations_header const & header, unsigned num_eqs, expr const 
 expr mk_equations(equations_header const & header, unsigned num_eqs, expr const * eqs);
 expr update_equations(expr const & eqns, buffer<expr> const & new_eqs);
 expr update_equations(expr const & eqns, equations_header const & header);
+expr remove_wf_annotation_from_equations(expr const & eqns);
 
 bool is_equations(expr const & e);
 bool is_wf_equations(expr const & e);

@@ -4,7 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Leonardo de Moura
 -/
 prelude
-import init.data.ordering init.coe init.data.to_string
+import init.data.ordering.basic init.coe init.data.to_string
 
 /-- Reflect a C++ name object. The VM replaces it with the C++ implementation. -/
 inductive name
@@ -18,6 +18,9 @@ inductive name
     For example, the tactic will *not* be invoked during type class resolution. -/
 @[reducible] def {u} auto_param (α : Sort u) (tac_name : name) : Sort u :=
 α
+
+@[simp] lemma {u} auto_param_eq (α : Sort u) (n : name) : auto_param α n = α :=
+rfl
 
 instance : inhabited name :=
 ⟨name.anonymous⟩
@@ -48,6 +51,10 @@ def name.update_prefix : name → name → name
 | (mk_string s p)  new_p := mk_string s new_p
 | (mk_numeral s p) new_p := mk_numeral s new_p
 
+/- The (decidable_eq string) has not been defined yet.
+   So, we disable the use of if-then-else when compiling the following definitions. -/
+set_option eqn_compiler.ite false
+
 def name.to_string_with_sep (sep : string) : name → string
 | anonymous                := "[anonymous]"
 | (mk_string s anonymous)  := s
@@ -77,10 +84,16 @@ meta constant name.lex_cmp : name → name → ordering
 meta constant name.append : name → name → name
 meta constant name.is_internal : name → bool
 
-attribute [instance] name.has_decidable_eq
+protected meta def name.lt (a b : name) : Prop :=
+name.cmp a b = ordering.lt
 
-meta instance : has_ordering name :=
-⟨name.cmp⟩
+meta instance : decidable_rel name.lt :=
+λ a b, ordering.decidable_eq _ _
+
+meta instance : has_lt name :=
+⟨name.lt⟩
+
+attribute [instance] name.has_decidable_eq
 
 meta instance : has_append name :=
 ⟨name.append⟩

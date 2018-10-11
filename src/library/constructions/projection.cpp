@@ -19,7 +19,9 @@ Author: Leonardo de Moura
 #include "library/normalize.h"
 #include "library/scoped_ext.h"
 #include "library/kernel_serializer.h"
+#include "library/class.h"
 #include "library/constructions/projection.h"
+#include "library/constructions/util.h"
 
 namespace lean {
 [[ noreturn ]] static void throw_ill_formed(name const & n) {
@@ -167,13 +169,15 @@ void finalize_def_projection() {
 }
 
 environment mk_projections(environment const & env, name const & n, buffer<name> const & proj_names,
-                           implicit_infer_kind infer_k, bool inst_implicit) {
+                           buffer<implicit_infer_kind> const & infer_kinds, bool inst_implicit) {
     // Given an inductive datatype C A (where A represent parameters)
     //   intro : Pi A (x_1 : B_1[A]) (x_2 : B_2[A, x_1]) ..., C A
     //
     // we generate projections of the form
     //   proj_i A (c : C A) : B_i[A, (proj_1 A n), ..., (proj_{i-1} A n)]
     //     C.rec A (fun (x : C A), B_i[A, ...]) (fun (x_1 ... x_n), x_i) c
+    lean_assert(proj_names.size() == infer_kinds.size());
+    name_generator ngen = mk_constructions_name_generator();
     auto p = get_nparam_intro_rule(env, n);
     unsigned nparams             = p.first;
     inductive::intro_rule intro  = p.second;
@@ -190,22 +194,31 @@ environment mk_projections(environment const & env, name const & n, buffer<name>
     for (unsigned i = 0; i < nparams; i++) {
         if (!is_pi(intro_type))
             throw_ill_formed(n);
-        expr param = mk_local(mk_fresh_name(), binding_name(intro_type), binding_domain(intro_type),
-            binding_info(intro_type).is_inst_implicit() ? mk_inst_implicit_binder_info() : binder_info());
+        auto bi = binding_info(intro_type);
+        auto type = binding_domain(intro_type);
+        if (!bi.is_inst_implicit())
+            // We reset implicit binders in favor of having them inferred by `infer_implicit_params` later
+            bi = binder_info();
+        if (is_class_out_param(type)) {
+            // hide `out_param`
+            type = app_arg(type);
+            // out_params should always be implicit since they can be inferred from the later `c` argument
+            bi = mk_implicit_binder_info();
+        }
+        expr param = mk_local(ngen.next(), binding_name(intro_type), type, bi);
         intro_type = instantiate(binding_body(intro_type), param);
         params.push_back(param);
     }
     expr C_A                     = mk_app(mk_constant(n, lvls), params);
     binder_info c_bi             = inst_implicit ? mk_inst_implicit_binder_info() : binder_info();
-    expr c                       = mk_local(mk_fresh_name(), name("c"), C_A, c_bi);
+    expr c                       = mk_local(ngen.next(), name("c"), C_A, c_bi);
     buffer<expr> intro_type_args; // arguments that are not parameters
     expr it = intro_type;
     while (is_pi(it)) {
-        expr local = mk_local(mk_fresh_name(), binding_name(it), binding_domain(it), binding_info(it));
+        expr local = mk_local(ngen.next(), binding_name(it), binding_domain(it), binding_info(it));
         intro_type_args.push_back(local);
         it = instantiate(binding_body(it), local);
     }
-    buffer<expr> projs; // projections generated so far
     unsigned i = 0;
     environment new_env = env;
     for (name const & proj_name : proj_names) {
@@ -234,7 +247,7 @@ environment mk_projections(environment const & env, name const & n, buffer<name>
         rec_args.push_back(major_premise);
         expr rec_app      = mk_app(rec, rec_args);
         expr proj_type    = Pi(proj_args, result_type);
-        proj_type         = infer_implicit_params(proj_type, nparams, infer_k);
+        proj_type         = infer_implicit_params(proj_type, nparams, infer_kinds[i]);
         expr proj_val     = Fun(proj_args, rec_app);
         if (new_env.trust_lvl() > 0) {
             // use macros

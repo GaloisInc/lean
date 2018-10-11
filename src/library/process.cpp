@@ -18,8 +18,8 @@ Author: Jared Roesch
 #include <stdio.h>
 #include <strsafe.h>
 #else
+#include <unistd.h>
 #include <sys/wait.h>
-
 #endif
 
 #include "library/process.h"
@@ -28,27 +28,13 @@ Author: Jared Roesch
 
 namespace lean {
 
-process::process(std::string n): m_proc_name(n), m_args() {
+process::process(std::string n, stdio io_stdin, stdio io_stdout, stdio io_stderr):
+    m_proc_name(n), m_stdout(io_stdout), m_stdin(io_stdin), m_stderr(io_stderr) {
     m_args.push_back(m_proc_name);
 }
 
 process & process::arg(std::string a) {
     m_args.push_back(a);
-    return *this;
-}
-
-process & process::set_stdin(stdio cfg) {
-    m_stdin = optional<stdio>(cfg);
-    return *this;
-}
-
-process & process::set_stdout(stdio cfg) {
-    m_stdout = optional<stdio>(cfg);
-    return *this;
-}
-
-process & process::set_stderr(stdio cfg) {
-    m_stderr = optional<stdio>(cfg);
     return *this;
 }
 
@@ -104,40 +90,38 @@ static HANDLE create_child_process(std::string cmd_name, optional<std::string> c
     HANDLE hstdin, HANDLE hstdout, HANDLE hstderr);
 
 // TODO(@jroesch): unify this code between platforms better.
-static optional<pipe> setup_stdio(SECURITY_ATTRIBUTES * saAttr, optional<stdio> cfg) {
+static optional<pipe> setup_stdio(SECURITY_ATTRIBUTES * saAttr, HANDLE * handle, bool in, stdio cfg) {
     /* Setup stdio based on process configuration. */
-    if (cfg) {
-        switch (*cfg) {
-        /* We should need to do nothing in this case */
-        case stdio::INHERIT:
-            return optional<pipe>();
-        case stdio::PIPED: {
-            HANDLE readh;
-            HANDLE writeh;
-            if (!CreatePipe(&readh, &writeh, saAttr, 0))
-                throw new exception("unable to create pipe");
-            return optional<pipe>(lean::pipe(readh, writeh));
-        }
-        case stdio::NUL: {
-            /* We should map /dev/null. */
-            return optional<pipe>();
-        }
-        default:
-           lean_unreachable();
-        }
-    } else {
+    switch (cfg) {
+    case stdio::INHERIT:
+        lean_always_assert(DuplicateHandle(GetCurrentProcess(), *handle,
+                                           GetCurrentProcess(), handle,
+                                           0, TRUE, DUPLICATE_SAME_ACCESS));
+        return optional<pipe>();
+    case stdio::PIPED: {
+        HANDLE readh;
+        HANDLE writeh;
+        if (!CreatePipe(&readh, &writeh, saAttr, 0))
+            throw new exception("unable to create pipe");
+        auto pipe = lean::pipe(readh, writeh);
+        auto ours = in ? pipe.m_write_fd : pipe.m_read_fd;
+        auto theirs = in ? pipe.m_read_fd : pipe.m_write_fd;
+        lean_always_assert(SetHandleInformation(ours, HANDLE_FLAG_INHERIT, 0));
+        *handle = theirs;
+        return optional<lean::pipe>(pipe);
+    }
+    case stdio::NUL:
+        /* We should map /dev/null. */
         return optional<pipe>();
     }
+    lean_unreachable();
 }
 
 // This code is adapted from: https://msdn.microsoft.com/en-us/library/windows/desktop/ms682499(v=vs.85).aspx
-std::shared_ptr<child> process::spawn() {
-    HANDLE child_stdin = stdin;
-    HANDLE child_stdout = stdout;
-    HANDLE child_stderr = stderr;
-    HANDLE parent_stdin = stdin;
-    HANDLE parent_stdout = stdout;
-    HANDLE parent_stderr = stderr;
+std::shared_ptr<child> process::spawn_core() {
+    HANDLE child_stdin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE child_stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE child_stderr = GetStdHandle(STD_ERROR_HANDLE);
 
     SECURITY_ATTRIBUTES saAttr;
 
@@ -146,31 +130,9 @@ std::shared_ptr<child> process::spawn() {
     saAttr.bInheritHandle = TRUE;
     saAttr.lpSecurityDescriptor = NULL;
 
-    auto stdin_pipe = setup_stdio(&saAttr, m_stdin);
-    auto stdout_pipe = setup_stdio(&saAttr, m_stdout);
-    auto stderr_pipe = setup_stdio(&saAttr, m_stderr);
-
-    if (stdin_pipe) {
-        // Ensure the write handle to the pipe for STDIN is not inherited.
-        if (!SetHandleInformation(stdin_pipe->m_write_fd, HANDLE_FLAG_INHERIT, 0))
-            throw new exception("unable to configure stdin pipe");
-        child_stdin = stdin_pipe->m_read_fd;
-    }
-
-    // Create a pipe for the child process's STDOUT.
-    if (stdout_pipe) {
-        // Ensure the read handle to the pipe for STDOUT is not inherited.
-        if (!SetHandleInformation(stdout_pipe->m_read_fd, HANDLE_FLAG_INHERIT, 0))
-            throw new exception("unable to configure stdout pipe");
-        child_stdout = stdout_pipe->m_write_fd;
-    }
-
-    if (stderr_pipe) {
-        // Ensure the read handle to the pipe for STDOUT is not inherited.
-        if (!SetHandleInformation(stderr_pipe->m_read_fd, HANDLE_FLAG_INHERIT, 0))
-            throw new exception("unable to configure stdout pipe");
-        child_stderr = stderr_pipe->m_write_fd;
-    }
+    auto stdin_pipe = setup_stdio(&saAttr, &child_stdin, true, m_stdin);
+    auto stdout_pipe = setup_stdio(&saAttr, &child_stdout, false, m_stdout);
+    auto stderr_pipe = setup_stdio(&saAttr, &child_stderr, false, m_stderr);
 
     std::string command;
 
@@ -195,25 +157,27 @@ std::shared_ptr<child> process::spawn() {
     auto proc_handle =
         create_child_process(command, m_cwd, m_env, child_stdin, child_stdout, child_stderr);
 
+    FILE * parent_stdin = nullptr, *parent_stdout = nullptr, *parent_stderr = nullptr;
+
     if (stdin_pipe) {
         CloseHandle(stdin_pipe->m_read_fd);
-        parent_stdin = stdin_pipe->m_write_fd;
+        parent_stdin = from_win_handle(stdin_pipe->m_write_fd, "w");
     }
 
     if (stdout_pipe) {
         CloseHandle(stdout_pipe->m_write_fd);
-        parent_stdout = stdout_pipe->m_read_fd;
+        parent_stdout = from_win_handle(stdout_pipe->m_read_fd, "r");
     }
 
     if (stderr_pipe) {
         CloseHandle(stderr_pipe->m_write_fd);
-        parent_stderr = stderr_pipe->m_read_fd;
+        parent_stderr = from_win_handle(stderr_pipe->m_read_fd, "r");
     }
 
     return std::make_shared<windows_child>(proc_handle,
-        std::make_shared<handle>(from_win_handle(parent_stdin, "w")),
-        std::make_shared<handle>(from_win_handle(parent_stdout, "r")),
-        std::make_shared<handle>(from_win_handle(parent_stderr, "r")));
+        std::make_shared<handle>(parent_stdin),
+        std::make_shared<handle>(parent_stdout),
+        std::make_shared<handle>(parent_stderr));
 }
 
 static void set_env(std::string const & var, optional<std::string> const & val) {
@@ -286,26 +250,19 @@ static HANDLE create_child_process(std::string command, optional<std::string> co
 
 #else
 
-static optional<pipe> setup_stdio(optional<stdio> cfg) {
+static optional<pipe> setup_stdio(stdio cfg) {
     /* Setup stdio based on process configuration. */
-    if (cfg) {
-        switch (*cfg) {
+    switch (cfg) {
+    case stdio::INHERIT:
         /* We should need to do nothing in this case */
-        case stdio::INHERIT:
-            return optional<pipe>();
-        case stdio::PIPED: {
-            return optional<pipe>(lean::pipe());
-        }
-        case stdio::NUL: {
-            /* We should map /dev/null. */
-            return optional<pipe>();
-        }
-        default:
-           lean_unreachable();
-        }
-    } else {
+        return optional<pipe>();
+    case stdio::PIPED:
+        return optional<pipe>(lean::pipe());
+    case stdio::NUL:
+        /* We should map /dev/null. */
         return optional<pipe>();
     }
+    lean_unreachable();
 }
 
 struct unix_child : public child {
@@ -324,11 +281,17 @@ struct unix_child : public child {
     unsigned wait() override {
         int status;
         waitpid(m_pid, &status, 0);
-        return static_cast<unsigned>(WEXITSTATUS(status));
+        if (WIFEXITED(status)) {
+            return static_cast<unsigned>(WEXITSTATUS(status));
+        } else {
+            lean_assert(WIFSIGNALED(status));
+            // use bash's convention
+            return 128 + static_cast<unsigned>(WTERMSIG(status));
+        }
     }
 };
 
-std::shared_ptr<child> process::spawn() {
+std::shared_ptr<child> process::spawn_core() {
     /* Setup stdio based on process configuration. */
     auto stdin_pipe = setup_stdio(m_stdin);
     auto stdout_pipe = setup_stdio(m_stdout);
@@ -406,9 +369,11 @@ std::shared_ptr<child> process::spawn() {
 
 #endif
 
-void process::run() {
-    spawn()->wait();
+std::shared_ptr<child> process::spawn() {
+    if (m_stdout == stdio::INHERIT) {
+        std::cout.flush();
+    }
+    return spawn_core();
 }
-
 
 }

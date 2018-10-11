@@ -154,7 +154,7 @@ void for_each_key_equivalence(environment const & env, std::function<void(buffer
         });
 }
 
-expr kabstract(type_context & ctx, expr const & e, expr const & t, occurrences const & occs) {
+expr kabstract(type_context_old & ctx, expr const & e, expr const & t, occurrences const & occs, bool unify) {
     lean_assert(closed(e));
     head_index idx1(t);
     key_equivalence_ext const & ext = get_extension(ctx.env());
@@ -167,7 +167,7 @@ expr kabstract(type_context & ctx, expr const & e, expr const & t, occurrences c
                     ext.is_eqv(idx1.get_name(), idx2.get_name()) &&
                     /* fail if same function application and different number of arguments */
                     (idx1.get_name() != idx2.get_name() || t_nargs == get_app_num_args(s)) &&
-                    ctx.is_def_eq(t, s)) {
+                    ((unify && ctx.unify(t, s)) || (!unify && ctx.match(t, s)))) {
                     if (occs.contains(i)) {
                         lean_trace("kabstract", scope_trace_env _(ctx.env(), ctx);
                                    tout() << "found target:\n" << s << "\n";);
@@ -182,7 +182,7 @@ expr kabstract(type_context & ctx, expr const & e, expr const & t, occurrences c
         }, occs.is_all());
 }
 
-bool kdepends_on(type_context & ctx, expr const & e, expr const & t) {
+bool kdepends_on(type_context_old & ctx, expr const & e, expr const & t) {
     bool found = false;
     head_index idx1(t);
     key_equivalence_ext const & ext = get_extension(ctx.env());
@@ -206,18 +206,18 @@ bool kdepends_on(type_context & ctx, expr const & e, expr const & t) {
 
 vm_obj tactic_kdepends_on(vm_obj const & e, vm_obj const & t, vm_obj const & md, vm_obj const & s) {
     try {
-        type_context ctx = mk_type_context_for(s, md);
+        type_context_old ctx = mk_type_context_for(s, md);
         return tactic::mk_success(mk_vm_bool(kdepends_on(ctx, to_expr(e), to_expr(t))), tactic::to_state(s));
     } catch (exception & ex) {
         return tactic::mk_exception(ex, tactic::to_state(s));
     }
 }
 
-vm_obj tactic_kabstract(vm_obj const & e, vm_obj const & t, vm_obj const & md, vm_obj const & s0) {
+vm_obj tactic_kabstract(vm_obj const & e, vm_obj const & t, vm_obj const & md, vm_obj const & u, vm_obj const & s0) {
     tactic_state s = tactic::to_state(s0);
     try {
-        type_context ctx = mk_type_context_for(s, to_transparency_mode(md));
-        auto a = kabstract(ctx, to_expr(e), to_expr(t), occurrences());
+        type_context_old ctx = mk_type_context_for(s, to_transparency_mode(md));
+        auto a = kabstract(ctx, to_expr(e), to_expr(t), occurrences(), to_bool(u));
         return tactic::mk_success(to_obj(a), set_mctx(s, ctx.mctx()));
     } catch (exception & ex) {
         return tactic::mk_exception(ex, s);

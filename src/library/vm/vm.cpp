@@ -25,19 +25,21 @@ Author: Leonardo de Moura
 #include "library/private.h"
 #include "library/profiling.h"
 #include "library/util.h"
+#include "library/time_task.h"
 #include "library/vm/vm.h"
 #include "library/vm/vm_name.h"
 #include "library/vm/vm_option.h"
 #include "library/vm/vm_expr.h"
 #include "library/normalize.h"
-#include "library/native_compiler/dynamic_library.h"
-#include "library/native_compiler/extern.h"
 
 #ifndef LEAN_DEFAULT_PROFILER_FREQ
 #define LEAN_DEFAULT_PROFILER_FREQ 1
 #endif
 
 namespace lean {
+/* Reference to the VM that is currently running. */
+LEAN_THREAD_VALUE(vm_state *, g_vm_state, nullptr);
+
 void vm_obj_cell::dec_ref(vm_obj & o, buffer<vm_obj_cell*> & todelete) {
     if (LEAN_VM_IS_PTR(o.m_data)) {
         vm_obj_cell * c = o.steal_ptr();
@@ -74,6 +76,9 @@ void vm_composite::dealloc(buffer<vm_obj_cell*> & todelete) {
 }
 
 vm_obj mk_vm_constructor(unsigned cidx, unsigned sz, vm_obj const * data) {
+    if (g_vm_state && g_vm_state->profiling()) {
+        g_vm_state->inc_constructor_allocs();
+    }
     return mk_vm_composite(vm_obj_kind::Constructor, cidx, sz, data);
 }
 
@@ -105,7 +110,36 @@ vm_obj mk_vm_constructor(unsigned cidx, vm_obj const & o1, vm_obj const & o2, vm
     return mk_vm_constructor(cidx, 5, args);
 }
 
+vm_obj update_vm_constructor(vm_obj const & o, unsigned i, vm_obj const & v) {
+    lean_vm_check(i < csize(o));
+    if (o.raw()->get_rc() == 1) {
+        vm_obj * fs = const_cast<vm_obj*>(cfields(o));
+        fs[i]       = v;
+        return o;
+    } else {
+        vm_obj r    = mk_vm_constructor(cidx(o), csize(o), cfields(o));
+        vm_obj * fs = const_cast<vm_obj*>(cfields(r));
+        fs[i]       = v;
+        return r;
+    }
+}
+
+vm_obj update_vm_pair(vm_obj const & o, vm_obj const & v_1, vm_obj const & v_2) {
+    lean_vm_check(csize(o) == 2);
+    if (o.raw()->get_rc() == 1) {
+        vm_obj * fs = const_cast<vm_obj*>(cfields(o));
+        fs[0]       = v_1;
+        fs[1]       = v_2;
+        return o;
+    } else {
+        return mk_vm_pair(v_1, v_2);
+    }
+}
+
 vm_obj mk_vm_closure(unsigned fn_idx, unsigned sz, vm_obj const * data) {
+    if (g_vm_state && g_vm_state->profiling()) {
+        g_vm_state->inc_closure_allocs();
+    }
     return mk_vm_composite(vm_obj_kind::Closure, fn_idx, sz, data);
 }
 
@@ -131,6 +165,9 @@ vm_obj mk_vm_closure(unsigned cidx, vm_obj const & o1, vm_obj const & o2, vm_obj
 vm_mpz::vm_mpz(mpz const & v):
     vm_obj_cell(vm_obj_kind::MPZ),
     m_value(v) {
+    if (g_vm_state && g_vm_state->profiling()) {
+        g_vm_state->inc_mpz_allocs();
+    }
 }
 
 vm_obj mk_vm_simple(unsigned v) {
@@ -278,7 +315,7 @@ void vm_obj_cell::dealloc() {
 
 void display(std::ostream & out, vm_obj const & o) {
     if (is_simple(o)) {
-        out << cidx(o);
+        out << "#" << cidx(o);
     } else if (is_constructor(o)) {
         out << "(#" << cidx(o);
         for (unsigned i = 0; i < csize(o); i++) {
@@ -989,17 +1026,12 @@ vm_decl_cell::vm_decl_cell(name const & n, unsigned idx, unsigned arity, vm_func
 vm_decl_cell::vm_decl_cell(name const & n, unsigned idx, unsigned arity, vm_cfunction fn):
     m_rc(0), m_kind(vm_decl_kind::CFun), m_name(n), m_idx(idx), m_arity(arity), m_cfn(fn) {}
 
-vm_decl_cell::vm_decl_cell(name const & n, unsigned idx, expr const & e, unsigned code_sz, vm_instr const * code,
+vm_decl_cell::vm_decl_cell(name const & n, unsigned idx, unsigned arity, unsigned code_sz, vm_instr const * code,
                            list<vm_local_info> const & args_info, optional<pos_info> const & pos,
                            optional<std::string> const & olean):
-    m_rc(0), m_kind(vm_decl_kind::Bytecode), m_name(n), m_idx(idx), m_expr(e), m_arity(0),
+    m_rc(0), m_kind(vm_decl_kind::Bytecode), m_name(n), m_idx(idx), m_arity(arity),
     m_args_info(args_info), m_pos(pos), m_olean(olean),
     m_code_size(code_sz) {
-    expr it = e;
-    while (is_lambda(it)) {
-        m_arity++;
-        it = binding_body(it);
-    }
     m_code = new vm_instr[code_sz];
     for (unsigned i = 0; i < code_sz; i++)
         m_code[i] = code[i];
@@ -1116,11 +1148,11 @@ struct vm_decls : public environment_extension {
         m_decls.insert(idx, vm_decl(n, idx, arity, fn));
     }
 
-    unsigned reserve(name const & n, expr const & e) {
+    unsigned reserve(name const & n, unsigned arity) {
         unsigned idx = get_vm_index(n);
         if (m_decls.contains(idx))
             throw exception(sstream() << "VM already contains code for '" << n << "'");
-        m_decls.insert(idx, vm_decl(n, idx, e, 0, nullptr, list<vm_local_info>(), optional<pos_info>()));
+        m_decls.insert(idx, vm_decl(n, idx, arity, 0, nullptr, list<vm_local_info>(), optional<pos_info>()));
         return idx;
     }
 
@@ -1220,25 +1252,25 @@ optional<unsigned> get_vm_builtin_idx(name const & n) {
 struct vm_reserve_modification : public modification {
     LEAN_MODIFICATION("VMR")
 
-    name m_fn;
-    expr m_e;
+    name     m_fn;
+    unsigned m_arity;
 
-    vm_reserve_modification(name const & fn, expr const & e) : m_fn(fn), m_e(e) {}
+    vm_reserve_modification(name const & fn, unsigned arity): m_fn(fn), m_arity(arity) {}
 
     void perform(environment & env) const override {
         vm_decls ext = get_extension(env);
-        ext.reserve(m_fn, m_e);
+        ext.reserve(m_fn, m_arity);
         env = update(env, ext);
     }
 
     void serialize(serializer & s) const override {
-        s << m_fn << m_e;
+        s << m_fn << m_arity;
     }
 
     static std::shared_ptr<modification const> deserialize(deserializer & d) {
-        name fn; expr e;
-        d >> fn >> e;
-        return std::make_shared<vm_reserve_modification>(fn, e);
+        name fn; unsigned arity;
+        d >> fn >> arity;
+        return std::make_shared<vm_reserve_modification>(fn, arity);
     }
 };
 
@@ -1258,7 +1290,7 @@ struct vm_code_modification : public modification {
 
     void serialize(serializer & s) const override {
         unsigned code_sz = m_decl.get_code_size();
-        s << m_decl.get_name() << m_decl.get_expr() << code_sz << m_decl.get_pos_info();
+        s << m_decl.get_name() << m_decl.get_arity() << code_sz << m_decl.get_pos_info();
         write_list(s, m_decl.get_args_info());
         auto c = m_decl.get_code();
         for (unsigned i = 0; i < code_sz; i++)
@@ -1266,15 +1298,15 @@ struct vm_code_modification : public modification {
     }
 
     static std::shared_ptr<modification const> deserialize(deserializer & d) {
-        name fn; unsigned code_sz; expr e; optional<pos_info> pos;
-        d >> fn >> e >> code_sz >> pos;
+        name fn; unsigned arity; unsigned code_sz; optional<pos_info> pos;
+        d >> fn >> arity >> code_sz >> pos;
         auto args_info = read_list<vm_local_info>(d);
         buffer<vm_instr> code;
         for (unsigned i = 0; i < code_sz; i++)
             code.emplace_back(read_vm_instr(d));
         optional<std::string> file_name; // TODO(gabriel)
         return std::make_shared<vm_code_modification>(
-                vm_decl(fn, get_vm_index(fn), e, code_sz, code.data(), args_info, pos, file_name));
+                vm_decl(fn, get_vm_index(fn), arity, code_sz, code.data(), args_info, pos, file_name));
     }
 };
 
@@ -1303,19 +1335,39 @@ struct vm_monitor_modification : public modification {
     }
 };
 
+environment reserve_vm_index(environment const & env, name const & fn, unsigned arity) {
+    return module::add_and_perform(env, std::make_shared<vm_reserve_modification>(fn, arity));
+}
+
+unsigned get_num_nested_lambdas(expr const & e) {
+    unsigned r = 0;
+    expr it = e;
+    while (is_lambda(it)) {
+        r++;
+        it = binding_body(it);
+    }
+    return r;
+}
+
 environment reserve_vm_index(environment const & env, name const & fn, expr const & e) {
-    return module::add_and_perform(env, std::make_shared<vm_reserve_modification>(fn, e));
+    return reserve_vm_index(env, fn, get_num_nested_lambdas(e));
 }
 
 environment update_vm_code(environment const & env, name const & fn, unsigned code_sz, vm_instr const * code,
                            list<vm_local_info> const & args_info, optional<pos_info> const & pos) {
-    vm_decl decl(fn, get_vm_index(fn), get_vm_decl(env, fn)->get_expr(), code_sz, code, args_info, pos);
+    vm_decl decl(fn, get_vm_index(fn), get_vm_decl(env, fn)->get_arity(), code_sz, code, args_info, pos);
     return module::add_and_perform(env, std::make_shared<vm_code_modification>(decl));
 }
 
 environment add_vm_code(environment const & env, name const & fn, expr const & e, unsigned code_sz, vm_instr const * code,
                         list<vm_local_info> const & args_info, optional<pos_info> const & pos) {
     environment new_env = reserve_vm_index(env, fn, e);
+    return update_vm_code(new_env, fn, code_sz, code, args_info, pos);
+}
+
+environment add_vm_code(environment const & env, name const & fn, unsigned arity, unsigned code_sz, vm_instr const * code,
+                        list<vm_local_info> const & args_info, optional<pos_info> const & pos) {
+    environment new_env = reserve_vm_index(env, fn, arity);
     return update_vm_code(new_env, fn, code_sz, code, args_info, pos);
 }
 
@@ -1408,9 +1460,6 @@ void vm_state::debugger_init() {
     m_debugging          = true;
     m_debugger_state_ptr.reset(new debugger_state(m_env));
 }
-
-/* Reference to the VM that is currently running. */
-LEAN_THREAD_VALUE(vm_state *, g_vm_state, nullptr);
 
 scope_vm_state::scope_vm_state(vm_state & s):
     m_prev(g_vm_state) {
@@ -3375,7 +3424,8 @@ vm_state::profiler::profiler(vm_state & s, options const & opts):
                         auto curr = chrono::steady_clock::now();
                         m_snapshots.push_back(snapshot_core());
                         snapshot_core & s = m_snapshots.back();
-                        s.m_duration = chrono::duration_cast<chrono::milliseconds>(curr - start);
+                        s.m_perf_counters = m_state.get_perf_counters();
+                        s.m_duration      = chrono::duration_cast<chrono::milliseconds>(curr - start);
                         for (frame const & fr : m_state.m_call_stack) {
                             if (fr.m_curr_fn_idx != g_null_fn_idx &&
                                 (s.m_stack.empty() || s.m_stack.back().first != fr.m_curr_fn_idx)) {
@@ -3417,8 +3467,9 @@ auto vm_state::profiler::get_snapshots() -> snapshots {
     std::unordered_map<name, chrono::milliseconds, name_hash> cum_times;
     for (snapshot_core const & s : m_snapshots) {
         snapshot new_s;
-        new_s.m_duration = s.m_duration;
-        r.m_total_time += s.m_duration;
+        new_s.m_duration       = s.m_duration;
+        new_s.m_perf_counters  = s.m_perf_counters;
+        r.m_total_time        += s.m_duration;
         auto & new_stack = new_s.m_stack;
         std::unordered_set<name, name_hash> decl_already_seen_in_this_stack;
         for (auto const & p : s.m_stack) {
@@ -3467,6 +3518,15 @@ static bool equal_fns(vm_state::profiler::snapshot const & s1, vm_state::profile
 #endif
 
 void vm_state::profiler::snapshots::display(std::ostream & out) const {
+    if (!m_snapshots.empty()) {
+        performance_counters const & c = m_snapshots.back().m_perf_counters;
+        if (c.m_num_constructor_allocs > 0)
+            out << "num. allocated objects:  " << c.m_num_constructor_allocs << "\n";
+        if (c.m_num_closure_allocs > 0)
+            out << "num. allocated closures: " << c.m_num_closure_allocs << "\n";
+        if (c.m_num_mpz_allocs > 0)
+            out << "num. allocated big nums: " << c.m_num_mpz_allocs << "\n";
+    }
     for (auto & cum_time : m_cum_times) {
         out << std::setw(5) << cum_time.second.count() << "ms   "
             << std::setw(5) << std::fixed << std::setprecision(1)
@@ -3495,6 +3555,7 @@ void vm_state::profiler::snapshots::display(std::ostream & out) const {
 }
 
 bool vm_state::profiler::snapshots::display(std::string const &what, options const &opts, std::ostream &out) const {
+    report_profiling_time(what + " execution", m_total_time);
     if (m_total_time >= get_profiling_threshold(opts)) {
         out << what << " execution took " << display_profiling_time{m_total_time} << "\n";
         display(out);
@@ -3538,56 +3599,11 @@ unsigned get_vm_builtin_arity(name const & fn) {
     lean_unreachable();
 }
 
-void* get_extern_symbol(std::string library_name, std::string extern_name) {
-    dynamic_library library(library_name);
-    return library.symbol(extern_name);
-}
-
 environment vm_monitor_register(environment const & env, name const & d) {
     expr const & type = env.get(d).get_type();
     if (!is_app_of(type, get_vm_monitor_name(), 1))
         throw exception("invalid vm_monitor.register argument, must be name of a definition of type (vm_monitor ?s) ");
     return module::add_and_perform(env, std::make_shared<vm_monitor_modification>(d));
-}
-
-environment load_external_fn(environment & env, name const & extern_n) {
-    try {
-        std::string lib_name = library_name(env, extern_n);
-        std::string symbol = symbol_name(env, extern_n);
-        dynamic_library *library = new dynamic_library(lib_name);
-        auto code = library->symbol(symbol);
-        lean_assert(code);
-
-        // Calculate the arity of the declared symbol.
-        unsigned arity = 1; // We always take at least one argument, because we are in the IO monad.
-        auto ty = normalize(env, env.get(extern_n).get_type(), true);
-        while (is_binding(ty)) {
-            ty = binding_body(ty);
-            arity += 1;
-        }
-        std::cout << arity << std::endl;
-
-        switch (arity) {
-        case 0: lean_unreachable();
-        case 1: return add_native(env, extern_n, (vm_cfunction_1)code);
-        case 2: return add_native(env, extern_n, (vm_cfunction_2)code);
-        case 3: return add_native(env, extern_n, (vm_cfunction_3)code);
-        case 4: return add_native(env, extern_n, (vm_cfunction_4)code);
-        case 5: return add_native(env, extern_n, (vm_cfunction_5)code);
-        case 6: return add_native(env, extern_n, (vm_cfunction_6)code);
-        case 7: return add_native(env, extern_n, (vm_cfunction_7)code);
-        case 8: return add_native(env, extern_n, (vm_cfunction_8)code);
-        default:
-            lean_unreachable();
-            // buffer<vm_obj> args;
-            // to_cbuffer(fn, args);
-            // args.push_back(a1);
-            // return to_fnN(d)(args.size(), args.data());
-        }
-    } catch (dynamic_linking_exception e) {
-        std::cout << e.what() << std::endl;
-        throw e;
-    }
 }
 
 [[noreturn]] void vm_check_failed(char const * condition) {

@@ -30,7 +30,49 @@ Author: Leonardo de Moura
 #include "library/unfold_macros.h"
 #include "library/module_mgr.h"
 #include "library/library_task_builder.h"
-#include "version.h"
+
+/*
+Missing features: non monotonic modifications in .olean files
+
+- Persistent `set_option`. We want to be able to store the option settings in .olean files.
+  The main issue is conflict between imported modules. That is, each imported module wants to
+  set a particular option with a different value. This can create counter-intuitive behavior.
+  Consider the following scenarion
+
+  * A.olean : sets option `foo` to true
+  * B.olean : imports A.olean
+  * C.olean : sets option `foo` to false
+  * We create D.lean containing the following import clause:
+    ```
+    import B C A
+    ```
+    The user may expect that `foo` is set to true, since `A` is the last module to be imported,
+    but this is not the case. `B` is imported first, then `A` (which sets option `foo` to true),
+    then `C` (which sets option `foo` to false), the last import `A` is skipped since `A` has already
+    been imported, and we get `foo` set to false.
+
+  To address this issue we consider a persistent option import validator. The validator
+  signs an error if there are two direct imports which try to set the same option to different
+  values. For example, in the example above, `B` and `C` are conflicting, and an error would
+  be signed when trying to import `C`. Then, users would have to resolve the conflict by
+  creating an auxiliary import. For example, they could create the module `C_aux.lean` containing
+  ```
+  import C
+  set_option persistent foo true
+  ```
+  and replace `import B C A` with `import B C_aux A`
+
+- Removing attributes. The validation procedure for persistent options can be extended to attribute
+  deletion. In latest version, we can only locally remove attributes. The validator for attribute deletion
+  would sign an error if there are two direct imports where one adds an attribute `[foo]` to an declaration
+  `bla` and the other removes it.
+
+- Parametric attributes. This is not a missing feature, but a bug. In the current version, we have
+  parametric attributes, and different modules may set the same declaration with different parameter values.
+  We can fix this bug by using an attribute validator which will check parametric attributes, or
+  we can allow parametric attributes to be set only once. That is, we sign an error if the user tries
+  to reset them.
+*/
 
 namespace lean {
 corrupted_file_exception::corrupted_file_exception(std::string const & fname):
@@ -210,11 +252,10 @@ void write_module(loaded_module const & mod, std::ostream & out) {
     std::string r = out1.str();
     unsigned h    = olean_hash(r);
 
-    unsigned major = LEAN_VERSION_MAJOR, minor = LEAN_VERSION_MINOR, patch = LEAN_VERSION_PATCH;
     bool uses_sorry = get(mod.m_uses_sorry);
 
     serializer s2(out);
-    s2 << g_olean_header << major << minor << patch;
+    s2 << g_olean_header << get_version_string();
     s2 << h;
     s2 << uses_sorry;
     // store imported files
@@ -480,28 +521,43 @@ environment add_inductive(environment                       env,
                           inductive::inductive_decl const & decl,
                           bool                              is_trusted) {
     pair<environment, certified_inductive_decl> r = inductive::add_inductive(env, decl, is_trusted);
-    environment new_env            = r.first;
-    certified_inductive_decl cdecl = r.second;
+    environment new_env             = r.first;
+    certified_inductive_decl cidecl = r.second;
     module_ext ext = get_extension(env);
     ext.m_module_decls = cons(decl.m_name, ext.m_module_decls);
     new_env = update(new_env, ext);
     new_env = add_decl_pos_info(new_env, decl.m_name);
-    return add(new_env, std::make_shared<inductive_modification>(cdecl, env.trust_lvl()));
+    return add(new_env, std::make_shared<inductive_modification>(cidecl, env.trust_lvl()));
 }
 } // end of namespace module
 
+bool is_candidate_olean_file(std::string const & file_name) {
+    std::ifstream in(file_name);
+    deserializer d1(in, optional<std::string>(file_name));
+    std::string header, version;
+    d1 >> header;
+    if (header != g_olean_header)
+        return false;
+    d1 >> version;
+#ifndef LEAN_IGNORE_OLEAN_VERSION
+    if (version != get_version_string())
+        return false;
+#endif
+    return true;
+}
+
 olean_data parse_olean(std::istream & in, std::string const & file_name, bool check_hash) {
-    unsigned major, minor, patch, claimed_hash;
     std::vector<module_name> imports;
     bool uses_sorry;
 
     deserializer d1(in, optional<std::string>(file_name));
-    std::string header;
+    std::string header, version;
+    unsigned claimed_hash;
     d1 >> header;
     if (header != g_olean_header)
         throw exception(sstream() << "file '" << file_name << "' does not seem to be a valid object Lean file, invalid header");
-    d1 >> major >> minor >> patch >> claimed_hash;
-    // Enforce version?
+    d1 >> version >> claimed_hash;
+    // version has already been checked in `is_candidate_olean_file`
 
     d1 >> uses_sorry;
 

@@ -34,12 +34,13 @@ bool check_hypothesis_in_context(metavar_context const & mctx, expr const & mvar
 expr subst(environment const & env, options const & opts, transparency_mode const & m, metavar_context & mctx,
            expr const & mvar, expr const & H, bool symm, hsubstitution * subst) {
     #define lean_subst_trace(CODE) lean_trace(name({"tactic", "subst"}), CODE)
-#define lean_subst_trace_state(MVAR, MSG) lean_trace(name({"tactic", "subst"}), tactic_state S = mk_tactic_state_for_metavar(env, opts, "subst", mctx, MVAR); type_context TMP_CTX = mk_type_context_for(S, m); scope_trace_env _scope1(env, TMP_CTX); tout() << MSG << S.pp_core() << "\n";)
+#define lean_subst_trace_state(MVAR, MSG) lean_trace(name({"tactic", "subst"}), tactic_state S = mk_tactic_state_for_metavar(env, opts, "subst", mctx, MVAR); type_context_old TMP_CTX = mk_cacheless_type_context_for(S, m); scope_trace_env _scope1(env, TMP_CTX); tout() << MSG << S.pp_core() << "\n";)
 
     lean_subst_trace_state(mvar, "initial:\n");
     lean_assert(mctx.find_metavar_decl(mvar));
+    lean_assert(is_local(H));
     metavar_decl g      = mctx.get_metavar_decl(mvar);
-    type_context ctx    = mk_type_context_for(env, opts, mctx, g.get_context(), m);
+    type_context_old ctx    = mk_type_context_for(env, opts, mctx, g.get_context(), m);
     expr H_type         = ctx.instantiate_mvars(ctx.infer(H));
     expr lhs, rhs;
     lean_verify(is_eq(H_type, lhs, rhs));
@@ -65,17 +66,30 @@ expr subst(environment const & env, options const & opts, transparency_mode cons
     expr H2             = lctx.get_local(lhsH2[1]);
     bool depH2          = depends_on(type, H2);
     expr new_type       = instantiate(abstract_local(type, lhs), rhs);
-    type_context ctx2   = mk_type_context_for(env, opts, mctx, g2.get_context(), m);
+    type_context_old ctx2   = mk_type_context_for(env, opts, mctx, g2.get_context(), m);
     expr motive;
     if (depH2) {
         new_type = instantiate(abstract_local(new_type, H2), mk_eq_refl(ctx2, rhs));
         if (symm) {
+            lean_subst_trace(tout() << "dep-elim and symm\n";);
             motive = ctx2.mk_lambda({lhs, H2}, type);
         } else {
-            motive = mk_lambda("H", mk_eq(ctx2, rhs, lhs), type);
-            motive = ctx2.mk_lambda(lhs, motive);
+            lean_subst_trace(tout() << "dep-elim\n";);
+            /* `type` depends on (H2 : lhs = rhs). So, we use the following trick to avoid a type incorrect motive.
+               1- Create a new local (H2_prime : rhs = lhs)
+               2- Create new_type := type [H2_prime.symm / H2]
+                  `new_type` is type correct because `H2` and `H2_prime.symm` are definitionally equal by proof irrelevance.
+               3- Create motive by abstracting `lhs` and `H2_prime` in `new_type`.
+             */
+            type_context_old::tmp_locals locals(ctx2);
+            expr H2_prime = locals.push_local("_h", mk_eq(ctx2, rhs, lhs));
+            expr H2_prime_symm = mk_eq_symm(ctx2, H2_prime);
+            /* replace H2 in type with H2'.symm, where H2' is a new local that is def-eq to H2.symm */
+            expr new_type = instantiate(abstract_local(type, H2), H2_prime_symm);
+            motive = ctx2.mk_lambda({lhs, H2_prime}, new_type);
         }
     } else {
+        lean_subst_trace(tout() << "non dep-elim\n";);
         motive   = ctx2.mk_lambda(lhs, type);
     }
     expr major   = symm ? H2 : mk_eq_symm(ctx2, H2);
@@ -171,7 +185,7 @@ vm_obj tactic_subst(vm_obj const & e, vm_obj const & s) {
 }
 
 void initialize_subst_tactic() {
-    DECLARE_VM_BUILTIN(name({"tactic", "subst"}), tactic_subst);
+    DECLARE_VM_BUILTIN(name({"tactic", "subst_core"}), tactic_subst);
     register_trace_class(name{"tactic", "subst"});
 }
 

@@ -90,13 +90,13 @@ meta def mk_or_lst : list expr → expr := mk_op_lst `(or) `(false)
 meta def elim_gen_prod : nat → expr → list expr → tactic (list expr × expr)
 | 0       e hs := return (hs, e)
 | (n + 1) e hs := do
-  [([h, h'], _)] ← induction e [],
+  [(_, [h, h'], _)] ← induction e [],
   elim_gen_prod n h' (hs ++ [h])
 
 private meta def elim_gen_sum_aux : nat → expr → list expr → tactic (list expr × expr)
 | 0       e hs := return (hs, e)
 | (n + 1) e hs := do
-  [([h], _), ([h'], _)] ← induction e [],
+  [(_, [h], _), (_, [h'], _)] ← induction e [],
   swap,
   elim_gen_sum_aux n h' (h::hs)
 
@@ -112,7 +112,7 @@ section
 universe u
 
 @[user_attribute]
-meta def monotonicity := { user_attribute . name := `monotonicity, descr := "Monotonicity rules for predicates" }
+meta def monotonicity : user_attribute := { name := `monotonicity, descr := "Monotonicity rules for predicates" }
 
 lemma monotonicity.pi {α : Sort u} {p q : α → Prop} (h : ∀a, implies (p a) (q a)) :
   implies (Πa, p a) (Πa, q a) :=
@@ -169,11 +169,13 @@ private meta def mono_aux (ns : list name) (hs : list expr) : tactic unit := do
       (do is_def_eq pd qd,
         let p' := expr.lam pn pbi pd pb,
         let q' := expr.lam qn qbi qd qb,
-        eapply $ (const `monotonicity.pi [u] : expr) pd p' q') <|>
+        eapply ((const `monotonicity.pi [u] : expr) pd p' q'),
+        skip) <|>
       (do guard $ u = level.zero ∧ is_arrow p ∧ is_arrow q,
         let p' := pb.lower_vars 0 1,
         let q' := qb.lower_vars 0 1,
-        eapply $ (const `monotonicity.imp []: expr) pd p' qd q'))) <|>
+        eapply ((const `monotonicity.imp []: expr) pd p' qd q'),
+        skip))) <|>
   first (hs.map $ λh, apply_core h {md := transparency.none, new_goals := new_goals.non_dep_only} >> skip) <|>
   first (ns.map $ λn, do c ← mk_const n, apply_core c {md := transparency.none, new_goals := new_goals.non_dep_only}, skip),
   all_goals mono_aux
@@ -402,7 +404,7 @@ meta def add_coinductive_predicate
       func_intros.mmap' (λ⟨n, pp_n, t⟩, solve1 $ do
         bs ← intros,
         ms ← apply_core ((const n u_params).app_of_list $ ps ++ fs.map prod.fst) {new_goals := new_goals.all},
-        params ← (ms.zip bs).enum.mfilter (λ⟨n, m, d⟩, bnot <$> is_assigned m),
+        params ← (ms.zip bs).enum.mfilter (λ⟨n, m, d⟩, bnot <$> is_assigned m.2),
         params.mmap' (λ⟨n, m, d⟩, mono d (fs.map prod.snd) <|>
           fail format! "failed to prove montonoicity of {n+1}. parameter of intro-rule {pp_n}")))),
 
@@ -459,7 +461,7 @@ meta def add_coinductive_predicate
       eapply $ pd.corec_functional.app_of_list $ ps ++ pds.map func_pred_g,
       pds.mmap' (λpd:coind_pred, solve1 $ do
         eapply $ pd.mono.app_of_list ps,
-        pds.mmap' (λpd, solve1 $ eapply $ pd.destruct.app_of_list ps)))),
+        pds.mmap' (λpd, solve1 $ eapply (pd.destruct.app_of_list ps) >> skip)))),
 
   /- prove `cases_on` rules -/
   pds.mmap' (λpd, do
@@ -526,7 +528,7 @@ meta def add_coinductive_predicate
                 (eqs ++ [eq']).mmap' subst
               else skip,
               eapply ((const r.func_nm u_params).app_of_list $ ps ++ fs),
-              repeat assumption)
+              iterate assumption)
           end),
         exact h)),
 
@@ -564,20 +566,18 @@ Current version: do not support mutual inductive rules (i.e. only a since C -/
 meta def coinduction (rule : expr) : tactic unit := focus1 $
 do
   ctxts' ← intros,
-  -- TODO: why do we need to fix the type here?
   ctxts ← ctxts'.mmap (λv,
     local_const v.local_uniq_name v.local_pp_name v.local_binder_info <$> infer_type v),
   mvars ← apply_core rule {approx := ff, new_goals := new_goals.all},
-
   -- analyse relation
   g ← list.head <$> get_goals,
-  (list.cons _ m_is) ← return $ mvars.drop_while (λv, v ≠ g),
+  (list.cons _ m_is) ← return $ mvars.drop_while (λv, v.2 ≠ g),
   tgt ← target,
   (is, ty) ← mk_local_pis tgt,
 
   -- construct coinduction predicate
   (bs, eqs) ← compact_relation ctxts <$>
-    ((is.zip m_is).mmap (λ⟨i, m⟩, prod.mk i <$> instantiate_mvars m)),
+    ((is.zip m_is).mmap (λ⟨i, m⟩, prod.mk i <$> instantiate_mvars m.2)),
 
   solve1 (do
     eqs ← mk_and_lst <$> eqs.mmap (λ⟨i, m⟩, mk_app `eq [m, i] >>= instantiate_mvars),
@@ -588,7 +588,7 @@ do
   solve1 (do
     target >>= instantiate_mvars >>= change, -- TODO: bug in existsi & constructor when mvars in hyptohesis
     bs.mmap existsi,
-    repeat econstructor),
+    iterate (econstructor >> skip)),
 
   -- clean up remaining coinduction steps
   all_goals (do

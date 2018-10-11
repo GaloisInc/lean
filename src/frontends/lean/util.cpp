@@ -164,8 +164,6 @@ bool is_local_ref(expr const & e) {
     if (!is_as_atomic(e))
         return false;
     expr const & imp_arg = get_as_atomic_arg(e);
-    if (!is_app(imp_arg))
-        return false;
     buffer<expr> locals;
     expr const & f = get_app_args(imp_arg, locals);
     return
@@ -249,10 +247,6 @@ static expr mk_binding_as_is(unsigned num, expr const * locals, expr const & b) 
             r = mk_pi(mlocal_pp_name(l), mk_as_is(t), r, local_info(l));
     }
     return r;
-}
-
-expr Fun_as_is(buffer<expr> const & locals, expr const & e, parser & p) {
-    return p.rec_save_pos(mk_binding_as_is<true>(locals.size(), locals.data(), e), p.get_pos_info(e));
 }
 
 expr Pi_as_is(buffer<expr> const & locals, expr const & e, parser & p) {
@@ -351,10 +345,6 @@ pair<name, option_kind> parse_option_name(parser & p, char const * error_msg) {
         }
     }
     return mk_pair(id, it->kind());
-}
-
-expr mk_tactic_unit() {
-    return mk_app(mk_constant(get_tactic_name(), {mk_level_zero()}), mk_constant(get_unit_name()));
 }
 
 expr quote(unsigned u) {

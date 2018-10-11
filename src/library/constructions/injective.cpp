@@ -19,10 +19,11 @@ Author: Daniel Selsam, Leonardo de Moura
 #include "library/tactic/tactic_state.h"
 #include "library/tactic/intro_tactic.h"
 #include "library/tactic/subst_tactic.h"
+#include "library/tactic/tactic_evaluator.h"
 
 namespace lean {
 
-static void collect_args(type_context & tctx, expr const & type, unsigned num_params,
+static void collect_args(type_context_old & tctx, expr const & type, unsigned num_params,
                   buffer<expr> & params, buffer<expr> & args1, buffer<expr> & args2, buffer<expr> & new_args) {
     expr ty = tctx.relaxed_whnf(type);
 
@@ -57,23 +58,23 @@ static void collect_args(type_context & tctx, expr const & type, unsigned num_pa
     lean_assert(!is_pi(ty));
 }
 
-expr mk_injective_type(environment const & env, name const & ir_name, expr const & ir_type, unsigned num_params, level_param_names const & lp_names) {
+expr mk_injective_type_core(environment const & env, name const & ir_name, expr const & ir_type, unsigned num_params, level_param_names const & lp_names, bool use_eq) {
     // The transparency needs to match the kernel since we need to be consistent with the no_confusion construction.
-    type_context tctx(env, transparency_mode::All);
+    type_context_old ctx(env, transparency_mode::All);
     buffer<expr> params, args1, args2, new_args;
-    collect_args(tctx, ir_type, num_params, params, args1, args2, new_args);
+    collect_args(ctx, ir_type, num_params, params, args1, args2, new_args);
     expr c_ir_params = mk_app(mk_constant(ir_name, param_names_to_levels(lp_names)), params);
     expr lhs = mk_app(c_ir_params, args1);
     expr rhs = mk_app(c_ir_params, args2);
-    expr eq_type = mk_eq(tctx, lhs, rhs);
+    expr eq_type = mk_eq(ctx, lhs, rhs);
 
     buffer<expr> eqs;
     for (unsigned arg_idx = 0; arg_idx < args1.size(); ++arg_idx) {
-        if (!tctx.is_prop(tctx.infer(args1[arg_idx])) && args1[arg_idx] != args2[arg_idx]) {
-            if (tctx.is_def_eq(tctx.infer(args1[arg_idx]), tctx.infer(args2[arg_idx]))) {
-                eqs.push_back(mk_eq(tctx, args1[arg_idx], args2[arg_idx]));
+        if (!ctx.is_prop(ctx.infer(args1[arg_idx])) && args1[arg_idx] != args2[arg_idx]) {
+            if (ctx.is_def_eq(ctx.infer(args1[arg_idx]), ctx.infer(args2[arg_idx]))) {
+                eqs.push_back(mk_eq(ctx, args1[arg_idx], args2[arg_idx]));
             } else {
-                eqs.push_back(mk_heq(tctx, args1[arg_idx], args2[arg_idx]));
+                eqs.push_back(mk_heq(ctx, args1[arg_idx], args2[arg_idx]));
             }
         }
     }
@@ -90,10 +91,19 @@ expr mk_injective_type(environment const & env, name const & ir_name, expr const
         }
     }
 
-    return tctx.mk_pi(params, tctx.mk_pi(args1, tctx.mk_pi(new_args, mk_arrow(eq_type, and_type))));
+    expr result = use_eq ? mk_eq(ctx, eq_type, and_type) : mk_arrow(eq_type, and_type);
+    return ctx.mk_pi(params, ctx.mk_pi(args1, ctx.mk_pi(new_args, result)));
 }
 
-expr prove_by_assumption(type_context & tctx, expr const & ty, expr const & eq) {
+expr mk_injective_type(environment const & env, name const & ir_name, expr const & ir_type, unsigned num_params, level_param_names const & lp_names) {
+    return mk_injective_type_core(env, ir_name, ir_type, num_params, lp_names, false);
+}
+
+expr mk_injective_eq_type(environment const & env, name const & ir_name, expr const & ir_type, unsigned num_params, level_param_names const & lp_names) {
+    return mk_injective_type_core(env, ir_name, ir_type, num_params, lp_names, true);
+}
+
+expr prove_by_assumption(type_context_old & tctx, expr const & ty, expr const & eq) {
     if (is_eq(ty) && is_heq(tctx.infer(eq))) {
         return mk_eq_of_heq(tctx, eq);
     } else {
@@ -101,7 +111,7 @@ expr prove_by_assumption(type_context & tctx, expr const & ty, expr const & eq) 
     }
 }
 
-expr prove_conjuncts_core(type_context & tctx, expr const & ty, buffer<expr> const & eqs, unsigned idx) {
+expr prove_conjuncts_core(type_context_old & tctx, expr const & ty, buffer<expr> const & eqs, unsigned idx) {
     if (idx == eqs.size() - 1) {
         lean_assert(!is_and(ty));
         return prove_by_assumption(tctx, ty, eqs[idx]);
@@ -114,12 +124,12 @@ expr prove_conjuncts_core(type_context & tctx, expr const & ty, buffer<expr> con
     }
 }
 
-expr prove_conjuncts(type_context & tctx, expr const & ty, buffer<expr> const & eqs) {
+expr prove_conjuncts(type_context_old & tctx, expr const & ty, buffer<expr> const & eqs) {
     return prove_conjuncts_core(tctx, ty, eqs, 0);
 }
 
 expr prove_injective(environment const & env, expr const & inj_type, name const & ind_name) {
-    type_context tctx(env);
+    type_context_old tctx(env);
     expr ty = inj_type;
 
     buffer<expr> args;
@@ -172,7 +182,7 @@ expr prove_injective(environment const & env, expr const & inj_type, name const 
 }
 
 expr prove_injective_arrow(environment const & env, expr const & inj_arrow_type, name const & inj_name, level_param_names const & inj_lp_names) {
-    type_context tctx(env);
+    type_context_old tctx(env);
     expr ty = inj_arrow_type;
 
     buffer<expr> args;
@@ -199,7 +209,7 @@ expr prove_injective_arrow(environment const & env, expr const & inj_arrow_type,
 
 environment mk_injective_arrow(environment const & env, name const & ir_name) {
     declaration d = env.get(mk_injective_name(ir_name));
-    type_context tctx(env);
+    type_context_old tctx(env);
 
     name P_lp_name = mk_fresh_lp_name(d.get_univ_params());
     expr P = tctx.push_local(name("P"), mk_sort(mk_param_univ(P_lp_name)), mk_strict_implicit_binder_info());
@@ -237,7 +247,23 @@ environment mk_injective_arrow(environment const & env, name const & ir_name) {
     return new_env;
 }
 
-environment mk_injective_lemmas(environment const & _env, name const & ind_name) {
+expr prove_injective_eq(environment const & env, expr const & inj_eq_type, name const & inj_eq_name) {
+    try {
+        type_context_old ctx(env, transparency_mode::Semireducible);
+        expr dummy_ref;
+        tactic_state s = mk_tactic_state_for(env, options(), inj_eq_name, metavar_context(), local_context(), inj_eq_type);
+        vm_obj r = tactic_evaluator(ctx, options(), dummy_ref)(mk_constant(get_tactic_mk_inj_eq_name()), s);
+        if (auto new_s = tactic::is_success(r)) {
+            metavar_context mctx = new_s->mctx();
+            return mctx.instantiate_mvars(new_s->main());
+        }
+    } catch (exception & ex) {
+        throw nested_exception(sstream() << "failed to generate auxiliary lemma '" << inj_eq_name << "'", ex);
+    }
+    throw exception(sstream() << "failed to generate auxiliary lemma '" << inj_eq_name << "'");
+}
+
+environment mk_injective_lemmas(environment const & _env, name const & ind_name, bool gen_inj_eq) {
     environment env = _env;
 
     auto idecls = inductive::is_inductive_decl(env, ind_name);
@@ -262,12 +288,22 @@ environment mk_injective_lemmas(environment const & _env, name const & ind_name)
         lean_trace(name({"constructions", "injective"}), tout() << ir_name << " : " << inj_type << " :=\n  " << inj_val << "\n";);
         env = module::add(env, check(env, mk_definition_inferring_trusted(env, mk_injective_name(ir_name), lp_names, inj_type, inj_val, true)));
         env = mk_injective_arrow(env, ir_name);
+        if (gen_inj_eq && env.find(get_tactic_mk_inj_eq_name())) {
+            name inj_eq_name  = mk_injective_eq_name(ir_name);
+            expr inj_eq_type  = mk_injective_eq_type(env, ir_name, ir_type, num_params, lp_names);
+            expr inj_eq_value = prove_injective_eq(env, inj_eq_type, inj_eq_name);
+            env = module::add(env, check(env, mk_definition_inferring_trusted(env, inj_eq_name, lp_names, inj_eq_type, inj_eq_value, true)));
+        }
     }
     return env;
 }
 
 name mk_injective_name(name const & ir_name) {
     return name(ir_name, "inj");
+}
+
+name mk_injective_eq_name(name const & ir_name) {
+    return name(ir_name, "inj_eq");
 }
 
 name mk_injective_arrow_name(name const & ir_name) {

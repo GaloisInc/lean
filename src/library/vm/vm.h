@@ -9,6 +9,7 @@ Author: Leonardo de Moura
 #include <algorithm>
 #include <vector>
 #include <string>
+#include <cstdint>
 #include "util/debug.h"
 #include "util/compiler_hints.h"
 #include "util/rc.h"
@@ -48,7 +49,7 @@ public:
 };
 
 #define LEAN_VM_IS_PTR(obj) ((reinterpret_cast<size_t>(obj) & 1) == 0)
-#define LEAN_VM_BOX(num)    (reinterpret_cast<vm_obj_cell*>((num << 1) | 1))
+#define LEAN_VM_BOX(num)    (reinterpret_cast<vm_obj_cell*>(static_cast<uintptr_t>((num << 1) | 1)))
 #define LEAN_VM_UNBOX(obj)  (reinterpret_cast<size_t>(obj) >> 1)
 
 [[noreturn]] void vm_check_failed(char const * condition);
@@ -222,6 +223,8 @@ vm_obj mk_vm_constructor(unsigned cidx, vm_obj const &, vm_obj const &);
 vm_obj mk_vm_constructor(unsigned cidx, vm_obj const &, vm_obj const &, vm_obj const &);
 vm_obj mk_vm_constructor(unsigned cidx, vm_obj const &, vm_obj const &, vm_obj const &, vm_obj const &);
 vm_obj mk_vm_constructor(unsigned cidx, vm_obj const &, vm_obj const &, vm_obj const &, vm_obj const &, vm_obj const &);
+vm_obj update_vm_constructor(vm_obj const & o, unsigned i, vm_obj const & v);
+vm_obj update_vm_pair(vm_obj const & o, vm_obj const & v_1, vm_obj const & v_2);
 /* TODO(Leo, Jared): delete native closures that take environment as argument */
 vm_obj mk_native_closure(environment const & env, name const & n, unsigned sz, vm_obj const * args);
 vm_obj mk_native_closure(environment const & env, name const & n, std::initializer_list<vm_obj const> args);
@@ -532,7 +535,6 @@ struct vm_decl_cell {
     vm_decl_kind          m_kind;
     name                  m_name;
     unsigned              m_idx;
-    expr                  m_expr;
     unsigned              m_arity;
     list<vm_local_info>   m_args_info;
     optional<pos_info>    m_pos;
@@ -547,7 +549,7 @@ struct vm_decl_cell {
     };
     vm_decl_cell(name const & n, unsigned idx, unsigned arity, vm_function fn);
     vm_decl_cell(name const & n, unsigned idx, unsigned arity, vm_cfunction fn);
-    vm_decl_cell(name const & n, unsigned idx, expr const & e, unsigned code_sz, vm_instr const * code,
+    vm_decl_cell(name const & n, unsigned idx, unsigned arity, unsigned code_sz, vm_instr const * code,
                  list<vm_local_info> const & args_info, optional<pos_info> const & pos,
                  optional<std::string> const & olean);
     ~vm_decl_cell();
@@ -564,10 +566,10 @@ public:
         vm_decl(new vm_decl_cell(n, idx, arity, fn)) {}
     vm_decl(name const & n, unsigned idx, unsigned arity, vm_cfunction fn):
         vm_decl(new vm_decl_cell(n, idx, arity, fn)) {}
-    vm_decl(name const & n, unsigned idx, expr const & e, unsigned code_sz, vm_instr const * code,
+    vm_decl(name const & n, unsigned idx, unsigned arity, unsigned code_sz, vm_instr const * code,
             list<vm_local_info> const & args_info, optional<pos_info> const & pos,
             optional<std::string> const & olean = optional<std::string>()):
-        vm_decl(new vm_decl_cell(n, idx, e, code_sz, code, args_info, pos, olean)) {}
+        vm_decl(new vm_decl_cell(n, idx, arity, code_sz, code, args_info, pos, olean)) {}
     vm_decl(vm_decl const & s):m_ptr(s.m_ptr) { if (m_ptr) m_ptr->inc_ref(); }
     vm_decl(vm_decl && s):m_ptr(s.m_ptr) { s.m_ptr = nullptr; }
     ~vm_decl() { if (m_ptr) m_ptr->dec_ref(); }
@@ -590,7 +592,6 @@ public:
     vm_instr const * get_code() const { lean_assert(is_bytecode()); return m_ptr->m_code; }
     vm_function get_fn() const { lean_assert(is_builtin()); return m_ptr->m_fn; }
     vm_cfunction get_cfn() const { lean_assert(is_cfun()); return m_ptr->m_cfn; }
-    expr const & get_expr() const { lean_assert(is_bytecode()); return m_ptr->m_expr; }
     list<vm_local_info> const & get_args_info() const { lean_assert(is_bytecode()); return m_ptr->m_args_info; }
     optional<pos_info> const & get_pos_info() const { lean_assert(is_bytecode()); return m_ptr->m_pos; }
     optional<std::string> const & get_olean() const { lean_assert(is_bytecode()); return m_ptr->m_olean; }
@@ -598,6 +599,12 @@ public:
 
 /** \brief Virtual machine for executing VM bytecode. */
 class vm_state {
+    struct performance_counters {
+        size_t                      m_num_constructor_allocs{0};
+        size_t                      m_num_closure_allocs{0};
+        size_t                      m_num_mpz_allocs{0};
+    };
+public:
     typedef std::vector<vm_decl> decl_vector;
     typedef std::vector<optional<vm_obj>> cache_vector;
     typedef unsigned_map<vm_decl> decl_map;
@@ -640,6 +647,8 @@ class vm_state {
     debugger_state_ptr          m_debugger_state_ptr;
     bool                        m_was_updated{false}; /* set to true if update_env is invoked */
 
+    performance_counters        m_perf_counters;
+
     void debugger_init();
     void debugger_step();
     void push_local_info(unsigned idx, vm_local_info const & info);
@@ -671,6 +680,8 @@ public:
 
     void update_env(environment const & env);
     bool env_was_updated() const { return m_was_updated; }
+
+    bool profiling() const { return m_profiling; }
 
     /* Auxiliary object for temporarily resetting env_was_updated flag. */
     class reset_env_was_updated_flag {
@@ -800,6 +811,7 @@ public:
         struct snapshot_core {
             chrono::milliseconds                  m_duration;
             std::vector<pair<unsigned, unsigned>> m_stack;
+            performance_counters                  m_perf_counters;
         };
         vm_state &                 m_state;
         atomic<bool>               m_stop;
@@ -814,6 +826,7 @@ public:
         struct snapshot {
             chrono::milliseconds              m_duration;
             std::vector<pair<name, unsigned>> m_stack;
+            performance_counters              m_perf_counters;
         };
 
         struct snapshots {
@@ -826,6 +839,12 @@ public:
         bool enabled() const { return m_thread_ptr.get() != nullptr; }
         snapshots get_snapshots();
     };
+
+    /* performance counters */
+    void inc_constructor_allocs() { m_perf_counters.m_num_constructor_allocs++; }
+    void inc_closure_allocs() { m_perf_counters.m_num_closure_allocs++; }
+    void inc_mpz_allocs() { m_perf_counters.m_num_mpz_allocs++; }
+    performance_counters const & get_perf_counters() const { return m_perf_counters; }
 };
 
 /** \brief Helper class for setting thread local vm_state object */
@@ -887,9 +906,14 @@ name get_vm_name(unsigned idx);
 optional<name> find_vm_name(unsigned idx);
 
 /** \brief Reserve an index for the given function in the VM, the expression
-    \c e is the value of \c fn after preprocessing.
+    \c e is the value of \c fn after preprocessing. \c e is used to compute the arity of fn.
     See library/compiler/pre_proprocess_rec.cpp for details. */
 environment reserve_vm_index(environment const & env, name const & fn, expr const & e);
+
+/** Lower level version of the previous function. */
+environment reserve_vm_index(environment const & env, name const & fn, unsigned arity);
+
+unsigned get_num_nested_lambdas(expr const & e);
 
 /** \brief Add bytcode for the function named \c fn in \c env.
     \remark The index for \c fn must have been reserved using reserve_vm_index. */
@@ -898,6 +922,8 @@ environment update_vm_code(environment const & env, name const & fn, unsigned co
 
 /** \brief Combines reserve_vm_index and update_vm_code */
 environment add_vm_code(environment const & env, name const & fn, expr const & e, unsigned code_sz, vm_instr const * code,
+                        list<vm_local_info> const & args_info, optional<pos_info> const & pos);
+environment add_vm_code(environment const & env, name const & fn, unsigned arity, unsigned code_sz, vm_instr const * code,
                         list<vm_local_info> const & args_info, optional<pos_info> const & pos);
 
 /** \brief Return the internal idx for the given constant. Return none

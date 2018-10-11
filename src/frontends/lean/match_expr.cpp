@@ -21,8 +21,8 @@ bool is_match_binder_name(name const & n) { return n == *g_match_name; }
 /** \brief Use equations compiler infrastructure to implement match-with */
 expr parse_match(parser & p, unsigned, expr const *, pos_info const & pos) {
     parser::local_scope scope1(p);
-    match_definition_scope scope2;
-    equations_header header = mk_equations_header(scope2.get_name());
+    match_definition_scope scope2(p.env());
+    equations_header header = mk_match_header(scope2.get_name(), scope2.get_actual_name());
     buffer<expr> eqns;
     buffer<expr> ts;
     try {
@@ -36,9 +36,9 @@ expr parse_match(parser & p, unsigned, expr const *, pos_info const & pos) {
         if (p.curr_is_token(get_colon_tk())) {
             p.next();
             expr type = p.parse_expr();
-            fn = mk_local(mk_fresh_name(), *g_match_name, type, mk_rec_info(true));
+            fn = mk_local(p.next_name(), *g_match_name, type, mk_rec_info(true));
         } else {
-            fn = mk_local(mk_fresh_name(), *g_match_name, mk_expr_placeholder(), mk_rec_info(true));
+            fn = mk_local(p.next_name(), *g_match_name, mk_expr_placeholder(), mk_rec_info(true));
         }
 
         p.check_token_next(get_with_tk(), "invalid 'match' expression, 'with' expected");

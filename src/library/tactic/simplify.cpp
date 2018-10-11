@@ -33,6 +33,9 @@ Author: Daniel Selsam, Leonardo de Moura
 #include "library/app_builder.h"
 #include "library/congr_lemma.h"
 #include "library/fun_info.h"
+#include "library/constructions/constructor.h"
+#include "library/constructions/injective.h"
+#include "library/inductive_compiler/ginductive.h"
 #include "library/vm/vm_expr.h"
 #include "library/vm/vm_option.h"
 #include "library/vm/vm_list.h"
@@ -40,11 +43,11 @@ Author: Daniel Selsam, Leonardo de Moura
 #include "library/vm/vm_name.h"
 #include "library/tactic/eqn_lemmas.h"
 #include "library/tactic/tactic_state.h"
-#include "library/tactic/ac_tactics.h"
 #include "library/tactic/app_builder_tactics.h"
 #include "library/tactic/simp_lemmas.h"
 #include "library/tactic/simplify.h"
 #include "library/tactic/dsimplify.h"
+#include "library/tactic/simp_util.h"
 
 #ifndef LEAN_DEFAULT_SIMPLIFY_MAX_STEPS
 #define LEAN_DEFAULT_SIMPLIFY_MAX_STEPS 1000000
@@ -60,8 +63,6 @@ Author: Daniel Selsam, Leonardo de Moura
 #endif
 
 namespace lean {
-#define lean_simp_trace(CTX, N, CODE) lean_trace(N, scope_trace_env _scope1(CTX.env(), CTX); CODE)
-#define lean_simp_trace_d(CTX, N, CODE) lean_trace_d(N, scope_trace_env _scope1(CTX.env(), CTX); CODE)
 
 simp_config::simp_config():
     m_max_steps(LEAN_DEFAULT_SIMPLIFY_MAX_STEPS),
@@ -75,6 +76,8 @@ simp_config::simp_config():
     m_eta(true),
     m_proj(true),
     m_iota(true),
+    m_iota_eqn(false),
+    m_constructor_eq(true),
     m_single_pass(false),
     m_fail_if_unchanged(true),
     m_memoize(true) {
@@ -92,9 +95,11 @@ simp_config::simp_config(vm_obj const & obj) {
     m_eta                = to_bool(cfield(obj, 8));
     m_proj               = to_bool(cfield(obj, 9));
     m_iota               = to_bool(cfield(obj, 10));
-    m_single_pass        = to_bool(cfield(obj, 11));
-    m_fail_if_unchanged  = to_bool(cfield(obj, 12));
-    m_memoize            = to_bool(cfield(obj, 13));
+    m_iota_eqn           = to_bool(cfield(obj, 11));
+    m_constructor_eq     = to_bool(cfield(obj, 12));
+    m_single_pass        = to_bool(cfield(obj, 13));
+    m_fail_if_unchanged  = to_bool(cfield(obj, 14));
+    m_memoize            = to_bool(cfield(obj, 15));
 }
 
 /* -----------------------------------
@@ -117,57 +122,20 @@ bool simplify_core_fn::is_dependent_fn(expr const & f) {
     return !is_arrow(f_type);
 }
 
-bool simplify_core_fn::instantiate_emetas(tmp_type_context & tmp_ctx, unsigned num_emeta,
-                                          list<expr> const & emetas, list<bool> const & instances) {
-    bool failed = false;
-    unsigned i  = num_emeta;
-    for_each2(emetas, instances, [&](expr const & mvar, bool const & is_instance) {
-            i--;
-            if (failed) return;
-            expr mvar_type = tmp_ctx.instantiate_mvars(tmp_ctx.infer(mvar));
-            if (has_idx_metavar(mvar_type)) {
-                failed = true;
-                return;
-            }
+class simp_prover {
+    simplify_core_fn & m_simp;
+public:
+    simp_prover(simplify_core_fn & s):m_simp(s) {}
 
-            if (tmp_ctx.is_eassigned(i)) return;
+    optional<expr> operator()(tmp_type_context &, expr const & e) {
+        return m_simp.prove(e);
+    }
+};
 
-            if (is_instance) {
-                if (auto v = m_ctx.mk_class_instance(mvar_type)) {
-                    if (!tmp_ctx.is_def_eq(mvar, *v)) {
-                        lean_simp_trace(tmp_ctx, name({"simplify", "failure"}),
-                                        tout() << "unable to assign instance for: " << mvar_type << "\n";);
-                        failed = true;
-                        return;
-                    }
-                } else {
-                    lean_simp_trace(tmp_ctx, name({"simplify", "failure"}),
-                                    tout() << "unable to synthesize instance for: " << mvar_type << "\n";);
-                    failed = true;
-                    return;
-                }
-            }
-
-            if (tmp_ctx.is_eassigned(i)) return;
-
-            if (m_ctx.is_prop(mvar_type)) {
-                if (auto pf = prove(mvar_type)) {
-                    lean_verify(tmp_ctx.is_def_eq(mvar, *pf));
-                    return;
-                } else {
-                    lean_simp_trace(tmp_ctx, name({"simplify", "failure"}),
-                                    tout() << "failed to prove: " << mvar << " : " << mvar_type << "\n";);
-                    failed = true;
-                    return;
-                }
-            } else {
-                lean_simp_trace(tmp_ctx, name({"simplify", "failure"}),
-                                tout() << "failed to assign: " << mvar << " : " << mvar_type << "\n";);
-                failed = true;
-                return;
-            }
-        });
-    return !failed;
+bool simplify_core_fn::instantiate_emetas(tmp_type_context & tmp_ctx, list <expr> const & emetas,
+                                          list<bool> const & instances) {
+    simp_prover prover(*this);
+    return instantiate_emetas_fn<simp_prover>(prover)(tmp_ctx, emetas, instances);
 }
 
 simp_result simplify_core_fn::lift_from_eq(simp_result const & r_eq) {
@@ -284,11 +252,11 @@ simp_result simplify_core_fn::try_user_congr(expr const & e, simp_lemma const & 
     buffer<expr> congr_hyps;
     to_buffer(cl.get_congr_hyps(), congr_hyps);
 
-    buffer<type_context::tmp_locals> factories;
+    buffer<type_context_old::tmp_locals> factories;
     buffer<name> relations;
     for (expr const & m : congr_hyps) {
         factories.emplace_back(m_ctx);
-        type_context::tmp_locals & local_factory = factories.back();
+        type_context_old::tmp_locals & local_factory = factories.back();
         expr m_type = tmp_ctx.instantiate_mvars(tmp_ctx.infer(m));
 
         while (is_pi(m_type)) {
@@ -341,7 +309,7 @@ simp_result simplify_core_fn::try_user_congr(expr const & e, simp_lemma const & 
     if (!simplified)
         return simp_result(e);
 
-    if (!instantiate_emetas(tmp_ctx, cl.get_num_emeta(), cl.get_emetas(), cl.get_instances()))
+    if (!instantiate_emetas(tmp_ctx, cl.get_emetas(), cl.get_instances()))
         return simp_result(e);
 
     for (unsigned i = 0; i < cl.get_num_umeta(); i++) {
@@ -537,7 +505,7 @@ simp_result simplify_core_fn::rewrite(expr const & e) {
 }
 
 bool simplify_core_fn::match(tmp_type_context & ctx, simp_lemma const & sl, expr const & t) {
-    return ctx.is_def_eq(sl.get_lhs(), t);
+    return ctx.match(sl.get_lhs(), t);
 }
 
 /* If both e and sl.get_lhs() are of the form (f ...),
@@ -566,7 +534,7 @@ simp_result simplify_core_fn::rewrite_core(expr const & e, simp_lemma const & sl
         return simp_result(e);
     }
 
-    if (!instantiate_emetas(tmp_ctx, sl.get_num_emeta(), sl.get_emetas(), sl.get_instances())) {
+    if (!instantiate_emetas(tmp_ctx, sl.get_emetas(), sl.get_instances())) {
         lean_simp_trace_d(m_ctx, name({"simplify", "failure"}),
                           lean_trace_init_bool(name({"simplify", "failure"}), get_pp_implicit_name(), true);
                           tout() << "fail to instantiate emetas: '" << sl.get_id() << "' at\n"
@@ -705,7 +673,10 @@ simp_result simplify_core_fn::visit(expr const & e, optional<expr> const & paren
             break;
         }
 
-        if (auto r2 = post(new_result.get_new(), parent)) {
+        if (m_cfg.m_constructor_eq && simplify_constructor_eq_constructor(new_result)) {
+            curr_result = new_result;
+            /* continue simplifying */
+        } else if (auto r2 = post(new_result.get_new(), parent)) {
             if (!r2->second) {
                 curr_result = join(new_result, r2->first);
                 break;
@@ -801,6 +772,63 @@ simp_result simplify_core_fn::visit_app(expr const & _e) {
     return simp_result(e);
 }
 
+bool simplify_core_fn::simplify_constructor_eq_constructor(simp_result & r) {
+    if (m_rel != get_eq_name())
+        return false; /* TODO(Leo): we can add support for <-> */
+    expr A, lhs, rhs;
+    if (!is_eq(r.get_new(), A, lhs, rhs))
+        return false;
+    optional<name> c1 = is_gintro_rule_app(m_ctx.env(), lhs);
+    if (!c1) return false;
+    optional<name> c2 = is_gintro_rule_app(m_ctx.env(), rhs);
+    if (!c2) return false;
+
+    if (*c1 != *c2) {
+        if (optional<expr> not_eq_prf = mk_constructor_ne_constructor_proof(m_ctx, lhs, rhs)) {
+            expr eq_false_prf = mk_app(m_ctx, get_eq_false_intro_name(), *not_eq_prf);
+            simp_result new_r(mk_false(), eq_false_prf);
+            r = join_eq(m_ctx, r, new_r);
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+        A = whnf_ginductive(m_ctx, A);
+        expr const & A_fn   = get_app_fn(A);
+        if (!is_constant(A_fn) || !is_ginductive(m_ctx.env(), const_name(A_fn)))
+            return false;
+        unsigned A_nparams = get_ginductive_num_params(m_ctx.env(), const_name(A_fn));
+        if (get_app_num_args(lhs) <= A_nparams)
+            return false;
+        name inj_eq_name = mk_injective_eq_name(*c1);
+        optional<declaration> inj_eq_decl = m_ctx.env().find(inj_eq_name);
+        if (!inj_eq_decl)
+            return false;
+        /* We use the `*.inj` lemma for computing the arguments for `*.inj_eq` lemma. */
+        try {
+            name inj_name = mk_injective_name(*c1);
+            optional<declaration> inj_decl = m_ctx.env().find(inj_name);
+            if (!inj_decl)
+                return false;
+            unsigned inj_arity = get_arity(inj_decl->get_type());
+            type_context_old::tmp_locals locals(m_ctx);
+            expr H   = locals.push_local("_h", r.get_new());
+            expr inj = mk_app(m_ctx, inj_name, inj_arity, H);
+            buffer<expr> inj_args;
+            expr const & inj_fn = get_app_args(inj, inj_args);
+            expr inj_eq_pr = mk_app(mk_constant(inj_eq_name, const_levels(inj_fn)), inj_args.size() - 1, inj_args.data());
+            expr inj_eq    = m_ctx.infer(inj_eq_pr);
+            expr new_lhs, new_rhs;
+            lean_verify(is_eq(inj_eq, new_lhs, new_rhs));
+            simp_result new_r(new_rhs, inj_eq_pr);
+            r = join_eq(m_ctx, r, new_r);
+            return true;
+        } catch (exception &) {
+            return false;
+        }
+    }
+}
+
 optional<expr> simplify_core_fn::prove(expr const &) {
     return none_expr();
 }
@@ -832,7 +860,7 @@ optional<pair<simp_result, bool>> simplify_core_fn::post(expr const &, optional<
     return optional<pair<simp_result, bool>>();
 }
 
-simplify_core_fn::simplify_core_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss,
+simplify_core_fn::simplify_core_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss,
                                    simp_config const & cfg):
     m_ctx(ctx), m_defeq_canonizer(m_ctx, dcs), m_slss(slss), m_cfg(cfg) {
 }
@@ -859,7 +887,7 @@ simp_result simplify_core_fn::operator()(name const & rel, expr const & e) {
     }
 }
 
-static expr mk_mpr(type_context & ctx, name const & rel, expr const & h1, expr const & h2) {
+static expr mk_mpr(type_context_old & ctx, name const & rel, expr const & h1, expr const & h2) {
     lean_assert(rel == get_eq_name() || rel == get_iff_name());
     if (rel == get_eq_name())
         return mk_eq_mpr(ctx, h1, h2);
@@ -895,14 +923,14 @@ optional<expr> simplify_core_fn::prove_by_simp(name const & rel, expr const & e)
    simplify_ext_core_fn
    ------------------------------------ */
 
-simplify_ext_core_fn::simplify_ext_core_fn(type_context & ctx, defeq_can_state & dcs, simp_lemmas const & slss,
+simplify_ext_core_fn::simplify_ext_core_fn(type_context_old & ctx, defeq_can_state & dcs, simp_lemmas const & slss,
                                            simp_config const & cfg):
     simplify_core_fn(ctx, dcs, slss, cfg) {
 }
 
 simp_result simplify_ext_core_fn::visit_lambda(expr const & e) {
     if (m_rel != get_eq_name() || !m_cfg.m_use_axioms) return simp_result(e);
-    type_context::tmp_locals locals(m_ctx);
+    type_context_old::tmp_locals locals(m_ctx);
     expr it = e;
     while (is_lambda(it)) {
         expr d = instantiate_rev(binding_domain(it), locals.size(), locals.as_buffer().data());
@@ -937,7 +965,7 @@ simp_result simplify_ext_core_fn::visit_lambda(expr const & e) {
 simp_result simplify_ext_core_fn::forall_congr(expr const & e) {
     lean_assert(m_rel == get_eq_name() || m_rel == get_iff_name());
     buffer<expr> pis;
-    type_context::tmp_locals locals(m_ctx);
+    type_context_old::tmp_locals locals(m_ctx);
     expr it = e;
     while (is_pi(it)) {
         expr d = instantiate_rev(binding_domain(it), locals.as_buffer().size(), locals.as_buffer().data());
@@ -992,7 +1020,7 @@ simp_result simplify_ext_core_fn::imp_congr(expr const & e) {
     expr const & b  = binding_body(e);
     simp_result r_a = visit(a, some_expr(e));
     if (m_cfg.m_contextual) {
-        type_context::tmp_locals locals(m_ctx);
+        type_context_old::tmp_locals locals(m_ctx);
         expr h = locals.push_local("_h", r_a.get_new());
         flet<simp_lemmas> set_slss(m_slss, add_to_slss(m_slss, locals.as_buffer()));
         freset<simplify_cache> reset_cache(m_cache);
@@ -1000,26 +1028,26 @@ simp_result simplify_ext_core_fn::imp_congr(expr const & e) {
         if (r_a.get_new() == a && r_b.get_new() == b) {
             return e;
         } else if (!r_a.has_proof() && !r_b.has_proof()) {
-            return simp_result(mk_arrow(r_a.get_new(), r_b.get_new()));
+            return simp_result(update_binding(e, r_a.get_new(), r_b.get_new()));
         } else {
             expr fn   = mk_constant(m_rel == get_eq_name() ? get_imp_congr_ctx_eq_name() : get_imp_congr_ctx_name());
             expr pr_a = finalize(m_ctx, m_rel, r_a).get_proof();
             expr pr_b = locals.mk_lambda(finalize(m_ctx, m_rel, r_b).get_proof());
             expr pr = mk_app({fn, a, b, r_a.get_new(), r_b.get_new(), pr_a, pr_b});
-            return simp_result(mk_arrow(r_a.get_new(), r_b.get_new()), pr);
+            return simp_result(update_binding(e, r_a.get_new(), r_b.get_new()), pr);
         }
     } else {
         simp_result r_b = visit(b, some_expr(e));
         if (r_a.get_new() == a && r_b.get_new() == b) {
             return e;
         } else if (!r_a.has_proof() && !r_b.has_proof()) {
-            return simp_result(mk_arrow(r_a.get_new(), r_b.get_new()));
+            return simp_result(update_binding(e, r_a.get_new(), r_b.get_new()));
         } else {
             expr fn   = mk_constant(m_rel == get_eq_name() ? get_imp_congr_eq_name() : get_imp_congr_name());
             expr pr_a = finalize(m_ctx, m_rel, r_a).get_proof();
             expr pr_b = finalize(m_ctx, m_rel, r_b).get_proof();
             expr pr = mk_app({fn, a, b, r_a.get_new(), r_b.get_new(), pr_a, pr_b});
-            return simp_result(mk_arrow(r_a.get_new(), r_b.get_new()), pr);
+            return simp_result(update_binding(e, r_a.get_new(), r_b.get_new()), pr);
         }
     }
 }
@@ -1062,9 +1090,23 @@ optional<pair<simp_result, bool>> simplify_fn::pre(expr const &, optional<expr> 
     return no_ext_result();
 }
 
+// TODO(Leo): move to a different file
+static optional<expr> unfold_using_nontrivial_eqns(type_context_old & ctx, expr const & e) {
+    if (!is_app(e)) return none_expr();
+    expr const & f = get_app_fn(e);
+    if (!is_constant(f)) return none_expr();
+    if (has_simple_eqn_lemma(ctx.env(), const_name(f))) return none_expr();
+    type_context_old::transparency_scope scope(ctx, transparency_mode::Semireducible);
+    return ctx.unfold_definition(e);
+}
+
 optional<pair<simp_result, bool>> simplify_fn::post(expr const & e, optional<expr> const &) {
     if (auto r = unfold_step(m_ctx, e, m_to_unfold, false))
         return to_ext_result(simp_result(*r));
+    if (m_cfg.m_iota_eqn) {
+        if (auto r = unfold_using_nontrivial_eqns(m_ctx, e))
+            return to_ext_result(simp_result(*r));
+    }
     simp_result r = rewrite(e);
     if (r.get_new() != e) {
         return to_ext_result(r);
@@ -1098,7 +1140,7 @@ class vm_simplify_fn : public simplify_ext_core_fn {
             m_s = *new_s;
             m_ctx.set_mctx(m_s.mctx());
             m_defeq_canonizer.set_state(m_s.dcs());
-            vm_obj t = cfield(r, 0);
+            vm_obj t = tactic::get_success_value(r);
             /* t : A × expr × option expr × bool */
             m_a        = cfield(t, 0);
             vm_obj t1  = cfield(t, 1);
@@ -1137,7 +1179,7 @@ class vm_simplify_fn : public simplify_ext_core_fn {
     }
 
 public:
-    vm_simplify_fn(type_context & ctx, defeq_can_state & dcs, simp_lemmas const & slss, simp_config const & cfg,
+    vm_simplify_fn(type_context_old & ctx, defeq_can_state & dcs, simp_lemmas const & slss, simp_config const & cfg,
                    vm_obj const & prove, vm_obj const & pre, vm_obj const & post, tactic_state const & s):
         simplify_ext_core_fn(ctx, dcs, slss, cfg),
         m_prove(prove), m_pre(pre), m_post(post),
@@ -1174,7 +1216,7 @@ class tactic_simplify_fn : public simplify_fn {
     }
 
 public:
-    tactic_simplify_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, list<name> const & to_unfold,
+    tactic_simplify_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, list<name> const & to_unfold,
                        simp_config const & cfg, tactic_state const & s, vm_obj const & prove):
         simplify_fn(ctx, dcs, slss, to_unfold, cfg),
         m_s(s),
@@ -1194,10 +1236,11 @@ meta constant simplify
 */
 vm_obj tactic_simplify(vm_obj const & slss, vm_obj const & u, vm_obj const & e, vm_obj const & c, vm_obj const & rel,
                        vm_obj const & prove, vm_obj const & _s) {
-    tactic_state const & s   = tactic::to_state(_s);
+    tactic_state s = tactic::to_state(_s);
     try {
         simp_config cfg(c);
-        type_context ctx     = mk_type_context_for(s, transparency_mode::Reducible);
+        tactic_state_context_cache cache(s);
+        type_context_old ctx     = cache.mk_type_context(transparency_mode::Reducible);
         defeq_can_state dcs  = s.dcs();
         tactic_simplify_fn simp(ctx, dcs, to_simp_lemmas(slss), to_list_name(u), cfg, s, prove);
         simp_result result   = simp(to_name(rel), to_expr(e));
@@ -1215,10 +1258,11 @@ vm_obj tactic_simplify(vm_obj const & slss, vm_obj const & u, vm_obj const & e, 
 
 static vm_obj ext_simplify_core(vm_obj const & a, vm_obj const & c, simp_lemmas const & slss, vm_obj const & prove,
                                 vm_obj const & pre, vm_obj const & post, name const & r, expr const & e,
-                                tactic_state const & s) {
+                                tactic_state s) {
     try {
         simp_config cfg(c);
-        type_context ctx     = mk_type_context_for(s, transparency_mode::Reducible);
+        tactic_state_context_cache cache(s);
+        type_context_old ctx     = cache.mk_type_context(transparency_mode::Reducible);
         defeq_can_state dcs  = s.dcs();
         vm_simplify_fn simp(ctx, dcs, slss, cfg, prove, pre, post, s);
         pair<vm_obj, simp_result> p = simp(a, r, e);

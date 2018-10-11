@@ -1,7 +1,7 @@
 import system.io
 
 section
-variable [io.interface]
+
 
 def tst_io : io string :=
 do b ← io.fs.read_file "tactic_io.lean",
@@ -10,7 +10,7 @@ end
 
 open tactic
 meta def tac : tactic unit :=
-do s ← tactic.run_io @tst_io,
+do s ← tactic.unsafe_run_io tst_io,
    trace s
 
 run_cmd tac

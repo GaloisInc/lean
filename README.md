@@ -8,7 +8,7 @@
     <td><a href="https://ci.appveyor.com/project/leodemoura/lean"><img src="https://ci.appveyor.com/api/projects/status/lush6vyy1m0qg6vc/branch/master"/></a></td>
     <td><a href="https://travis-ci.org/leanprover/lean"><img src="https://travis-ci.org/leanprover/lean.png?branch=master"/></a></td>
     <td><a href="https://codecov.io/gh/leanprover/lean"><img src="https://codecov.io/gh/leanprover/lean/branch/master/graph/badge.svg" alt="Codecov"/></a></td>
-    <td><a href="https://gitter.im/leanprover_public/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge"><img src="https://badges.gitter.im/leanprover_public/Lobby.svg" alt="Join the gitter chat"/></a></td>
+    <td><a href="https://leanprover.zulipchat.com"><img src="https://img.shields.io/badge/zulip-join_chat-brightgreen.svg" alt="Join the Zulip chat"/></a></td>
   </tr>
 </table>
 
@@ -17,24 +17,17 @@ About
 
 - [Homepage](http://leanprover.github.io)
 - [Theorem Proving in Lean](https://leanprover.github.io/theorem_proving_in_lean/index.html)
-- [Core library](library/library.md)
-- [Emacs Mode](src/emacs/README.md)
 - [Change Log](doc/changes.md)
+- [FAQ](doc/faq.md)
+- **Important**: Lean 3.4.1 is the latest release. It is also the last release for the Lean 3.x code base. Only major bugs (e.g., soundness) will be fixed for this code base from now on.
+  We are currently developing Lean 4 in a new (private) repository.
+  The Lean 4 source code will be released here when ready. The main goals for Lean 4 are described [here](doc/lean4.md).
 - For HoTT mode, please use [Lean2](https://github.com/leanprover/lean2).
 
-Requirements
+Installation
 ------------
 
-- C++11 compatible compiler
-- [CMake](http://www.cmake.org)
-- [GMP (GNU multiprecision library)](http://gmplib.org/)
-
-Build Instructions
-------------------
-
-- [Linux (Ubuntu)](doc/make/ubuntu-16.04.md)
-- [Windows (msys2)](doc/make/msys2.md)
-- [macOS](doc/make/osx-10.9.md)
+Stable and nightly binary releases of Lean are available on the [homepage](https://leanprover.github.io/download/). For building Lean from source, see the [build instructions](doc/make/index.md).
 
 Miscellaneous
 -------------

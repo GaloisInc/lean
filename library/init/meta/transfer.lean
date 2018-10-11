@@ -57,7 +57,7 @@ private meta structure rule_data :=
 (uargs   : list name)              -- levels not in pat
 (args    : list (expr × rel_data)) -- fst : local constant
 (pat     : pattern)                -- `R c`
-(out     : expr)                   -- right-hand side `d` of rel equation `R c d`
+(output  : expr)                   -- right-hand side `d` of rel equation `R c d`
 
 meta instance has_to_tactic_format_rule_data : has_to_tactic_format rule_data :=
 ⟨λr, do
@@ -67,8 +67,8 @@ meta instance has_to_tactic_format_rule_data : has_to_tactic_format rule_data :=
   ua ← pp r.uargs,
   ma ← pp r.args,
   pat ← pp r.pat.target,
-  out ← pp r.out,
-  return format!"{{ ⟨{pat}⟩ pr: {pr} → {out}, {up} {mp} {ua} {ma} }" ⟩
+  output ← pp r.output,
+  return format!"{{ ⟨{pat}⟩ pr: {pr} → {output}, {up} {mp} {ua} {ma} }" ⟩
 
 private meta def get_lift_fun : expr → tactic (list rel_data × expr)
 | e :=
@@ -138,7 +138,7 @@ meta def compute_transfer : list rule_data → list expr → expr → tactic (ex
 | rds ctxt e := do
   -- Select matching rule
   (i, ps, args, ms, rd) ← first (rds.map (λrd, do
-    (l, m)     ← match_pattern_core semireducible rd.pat e,
+    (l, m)     ← match_pattern rd.pat e semireducible,
     level_map  ← rd.uparams.mmap $ λl, prod.mk l <$> mk_meta_univ,
     inst_univ  ← return $ λe, instantiate_univ_params e (level_map ++ zip rd.uargs l),
     (ps, args) ← return $ split_params_args (rd.params.map (prod.map inst_univ id)) m,
@@ -164,7 +164,7 @@ meta def compute_transfer : list rule_data → list expr → expr → tactic (ex
     return (b', [a, b', lambdas (list.join bnds) pr], ms)) >>= (return ∘ prod.map id unzip ∘ unzip),
 
   -- Combine
-  b  ← head_beta (app_of_list (i rd.out) bs),
+  b  ← head_beta (app_of_list (i rd.output) bs),
   pr ← return $ app_of_list (i rd.pr) (prod.snd <$> ps ++ list.join hs),
   return (b, pr, ms ++ mss.join)
 

@@ -8,6 +8,9 @@ import init.core
 
 universes u v w
 
+@[simp] lemma opt_param_eq (α : Sort u) (default : α) : opt_param α default = α :=
+rfl
+
 @[inline] def id {α : Sort u} (a : α) : α := a
 
 def flip {α : Sort u} {β : Sort v} {φ : Sort w} (f : α → β → φ) : β → α → φ :=
@@ -374,19 +377,19 @@ iff.intro
   (assume ⟨ha, hb⟩, ⟨ha, iff.elim_left (h ha) hb⟩)
   (assume ⟨ha, hc⟩, ⟨ha, iff.elim_right (h ha) hc⟩)
 
-@[simp] lemma and.comm : a ∧ b ↔ b ∧ a :=
+lemma and.comm : a ∧ b ↔ b ∧ a :=
 iff.intro and.swap and.swap
 
 lemma and_comm (a b : Prop) : a ∧ b ↔ b ∧ a := and.comm
 
-@[simp] lemma and.assoc : (a ∧ b) ∧ c ↔ a ∧ (b ∧ c) :=
+lemma and.assoc : (a ∧ b) ∧ c ↔ a ∧ (b ∧ c) :=
 iff.intro
   (assume ⟨⟨ha, hb⟩, hc⟩, ⟨ha, ⟨hb, hc⟩⟩)
   (assume ⟨ha, ⟨hb, hc⟩⟩, ⟨⟨ha, hb⟩, hc⟩)
 
 lemma and_assoc (a b : Prop) : (a ∧ b) ∧ c ↔ a ∧ (b ∧ c) := and.assoc
 
-@[simp] lemma and.left_comm : a ∧ (b ∧ c) ↔ b ∧ (a ∧ c) :=
+lemma and.left_comm : a ∧ (b ∧ c) ↔ b ∧ (a ∧ c) :=
 iff.trans (iff.symm and.assoc) (iff.trans (and_congr and.comm (iff.refl c)) and.assoc)
 
 lemma and_iff_left {a b : Prop} (hb : b) : (a ∧ b) ↔ a :=
@@ -430,11 +433,11 @@ or.imp id h
 @[congr] lemma or_congr (h₁ : a ↔ c) (h₂ : b ↔ d) : (a ∨ b) ↔ (c ∨ d) :=
 iff.intro (or.imp (iff.mp h₁) (iff.mp h₂)) (or.imp (iff.mpr h₁) (iff.mpr h₂))
 
-@[simp] lemma or.comm : a ∨ b ↔ b ∨ a := iff.intro or.swap or.swap
+lemma or.comm : a ∨ b ↔ b ∨ a := iff.intro or.swap or.swap
 
 lemma or_comm (a b : Prop) : a ∨ b ↔ b ∨ a := or.comm
 
-@[simp] lemma or.assoc : (a ∨ b) ∨ c ↔ a ∨ (b ∨ c) :=
+lemma or.assoc : (a ∨ b) ∨ c ↔ a ∨ (b ∨ c) :=
 iff.intro
   (or.rec (or.imp_right or.inl) (λ h, or.inr (or.inr h)))
   (or.rec (λ h, or.inl (or.inl h)) (or.imp_left or.inr))
@@ -442,7 +445,7 @@ iff.intro
 lemma or_assoc (a b : Prop) : (a ∨ b) ∨ c ↔ a ∨ (b ∨ c) :=
 or.assoc
 
-@[simp] lemma or.left_comm : a ∨ (b ∨ c) ↔ b ∨ (a ∨ c) :=
+lemma or.left_comm : a ∨ (b ∨ c) ↔ b ∨ (a ∨ c) :=
 iff.trans (iff.symm or.assoc) (iff.trans (or_congr or.comm (iff.refl c)) or.assoc)
 
 theorem or_iff_right_of_imp (ha : a → b) : (a ∨ b) ↔ b :=
@@ -519,7 +522,7 @@ iff.intro (λ h, h trivial) (λ h h', h)
 /- exists -/
 
 inductive Exists {α : Sort u} (p : α → Prop) : Prop
-| intro : ∀ (a : α), p a → Exists
+| intro (w : α) (h : p w) : Exists
 
 attribute [intro] Exists.intro
 
@@ -589,6 +592,12 @@ decidable.cases_on h (λ h₁, bool.ff) (λ h₂, bool.tt)
 
 export decidable (is_true is_false to_bool)
 
+@[simp] lemma to_bool_true_eq_tt (h : decidable true) : @to_bool true h = tt :=
+decidable.cases_on h (λ h, false.elim (iff.mp not_true h)) (λ _, rfl)
+
+@[simp] lemma to_bool_false_eq_ff (h : decidable false) : @to_bool false h = ff :=
+decidable.cases_on h (λ h, rfl) (λ h, false.elim h)
+
 instance decidable.true : decidable true :=
 is_true trivial
 
@@ -622,6 +631,36 @@ namespace decidable
 
   lemma by_contradiction [decidable p] (h : ¬p → false) : p :=
   if h₁ : p then h₁ else false.rec _ (h h₁)
+
+  lemma of_not_not [decidable p] : ¬ ¬ p → p :=
+  λ hnn, by_contradiction (λ hn, absurd hn hnn)
+
+  lemma not_not_iff (p) [decidable p] : (¬ ¬ p) ↔ p :=
+  iff.intro of_not_not not_not_intro
+
+  lemma not_and_iff_or_not (p q : Prop) [d₁ : decidable p] [d₂ : decidable q] : ¬ (p ∧ q) ↔ ¬ p ∨ ¬ q :=
+  iff.intro
+  (λ h, match d₁ with
+        | is_true h₁  :=
+          match d₂ with
+          | is_true h₂  := absurd (and.intro h₁ h₂) h
+          | is_false h₂ := or.inr h₂
+          end
+        | is_false h₁ := or.inl h₁
+        end)
+  (λ h ⟨hp, hq⟩, or.elim h (λ h, h hp) (λ h, h hq))
+
+  lemma not_or_iff_and_not (p q) [d₁ : decidable p] [d₂ : decidable q] : ¬ (p ∨ q) ↔ ¬ p ∧ ¬ q :=
+  iff.intro
+    (λ h, match d₁ with
+          | is_true h₁  := false.elim $ h (or.inl h₁)
+          | is_false h₁ :=
+            match d₂ with
+            | is_true h₂  := false.elim $ h (or.inr h₂)
+            | is_false h₂ := ⟨h₁, h₂⟩
+            end
+          end)
+    (λ ⟨np, nq⟩ h, or.elim h np nq)
 end decidable
 
 section
@@ -749,7 +788,7 @@ instance : inhabited bool := ⟨ff⟩
 instance : inhabited true := ⟨trivial⟩
 
 class inductive nonempty (α : Sort u) : Prop
-| intro : α → nonempty
+| intro (val : α) : nonempty
 
 protected def nonempty.elim {α : Sort u} {p : Prop} (h₁ : nonempty α) (h₂ : α → p) : p :=
 nonempty.rec h₂ h₁
@@ -763,7 +802,7 @@ lemma nonempty_of_exists {α : Sort u} {p : α → Prop} : (∃ x, p x) → none
 /- subsingleton -/
 
 class inductive subsingleton (α : Sort u) : Prop
-| intro : (∀ a b : α, a = b) → subsingleton
+| intro (h : ∀ a b : α, a = b) : subsingleton
 
 protected def subsingleton.elim {α : Sort u} [h : subsingleton α] : ∀ (a b : α), a = b :=
 subsingleton.rec (λ p, p) h

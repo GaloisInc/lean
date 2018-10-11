@@ -11,6 +11,7 @@ open nat
 
 /- the type, coercions, and notation -/
 
+@[derive decidable_eq]
 inductive int : Type
 | of_nat : nat → int
 | neg_succ_of_nat : nat → int
@@ -20,9 +21,6 @@ notation `ℤ` := int
 instance : has_coe nat int := ⟨int.of_nat⟩
 
 notation `-[1+ ` n `]` := int.neg_succ_of_nat n
-
-instance : decidable_eq int :=
-by tactic.mk_dec_eq_instance
 
 protected def int.repr : int → string
 | (int.of_nat n)          := repr n
@@ -142,6 +140,7 @@ begin
       rw [nat.sub_eq_iff_eq_add h] at heq,
       rw [heq, add_comm],
       apply hn } },
+  delta sub_nat_nat,
   exact H _ rfl
 end
 
@@ -299,11 +298,11 @@ protected lemma rel_eq : (rel_int_nat_nat ⇒ (rel_int_nat_nat ⇒ iff))
     ... ↔ (m + p) + m' = (m' + p') + m : by simp
 | ._ ._ (@rel_int_nat_nat.pos m p) ._ ._ (@rel_int_nat_nat.neg m' n') :=
   calc of_nat p = -[1+ n'] ↔ (m' + m) + (n' + p + 1) = (m' + m) + 0 :
-     begin rw [add_left_cancel_iff], apply iff.intro, repeat {intro, contradiction} end
+     begin rw [add_left_cancel_iff], apply iff.intro; intro; contradiction end
    ... ↔ (m + p) + (m' + n' + 1) = m' + m : by simp
 | ._ ._ (@rel_int_nat_nat.neg m n) ._ ._ (@rel_int_nat_nat.pos m' p') :=
   calc -[1+ n] = of_nat p' ↔ (m + m') + 0 = (m + m') + (n + p' + 1) :
-     begin rw [add_left_cancel_iff], apply iff.intro, repeat {intro, contradiction} end
+     begin rw [add_left_cancel_iff], apply iff.intro; intro; contradiction end
    ... ↔ m + m' = m' + p' + (m + n + 1) : by simp
 | ._ ._ (@rel_int_nat_nat.neg m n) ._ ._ (@rel_int_nat_nat.neg m' n') :=
   calc -[1+ n] = -[1+ n'] ↔ (m + m' + 1) + n' = (m + m' + 1) + n :
@@ -394,6 +393,8 @@ protected meta def transfer_core : tactic unit := do
 protected meta def transfer (distrib := tt) : tactic unit :=
 if distrib then `[int.transfer_core, simp [add_mul, mul_add]]
 else `[int.transfer_core, simp]
+
+local attribute [simp] mul_assoc mul_comm mul_left_comm
 
 instance : comm_ring int :=
 { add            := int.add,

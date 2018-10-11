@@ -10,17 +10,25 @@ Author: Leonardo de Moura
 #include "library/compiler/comp_irrelevant.h"
 
 namespace lean {
-compiler_step_visitor::compiler_step_visitor(environment const & env):
+/*
+  Remark: we don't need typeclass resolution in the compiler.
+*/
+static local_context mk_local_context_without_local_instances() {
+    local_context lctx;
+    lctx.freeze_local_instances(local_instances());
+    return lctx;
+}
+
+compiler_step_visitor::compiler_step_visitor(environment const & env, abstract_context_cache & cache):
     m_env(env),
-    /* We don't need typeclass resolution in the compiler. */
-    m_ctx(env, options(), local_context::mk_with_instance_fingerprint(), transparency_mode::All) {
+    m_ctx(env, metavar_context(), mk_local_context_without_local_instances(), cache, transparency_mode::All) {
 }
 
 compiler_step_visitor::~compiler_step_visitor() {
 }
 
 expr compiler_step_visitor::visit_lambda_let(expr const & e) {
-    type_context::tmp_locals locals(m_ctx);
+    type_context_old::tmp_locals locals(m_ctx);
     expr t = e;
     while (true) {
         /* Types are ignored in compilation steps. So, we do not invoke visit for d. */

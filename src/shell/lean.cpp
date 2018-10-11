@@ -7,8 +7,8 @@ Author: Leonardo de Moura
 #include <iostream>
 #include <fstream>
 #include <signal.h>
+#include <cctype>
 #include <cstdlib>
-#include <getopt.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,25 +39,128 @@ Author: Leonardo de Moura
 #include "library/io_state_stream.h"
 #include "library/export.h"
 #include "library/message_builder.h"
+#include "library/time_task.h"
 #include "frontends/lean/parser.h"
 #include "frontends/lean/pp.h"
 #include "frontends/lean/dependencies.h"
-#include "frontends/smt2/parser.h"
 #include "frontends/lean/json.h"
-#include "library/native_compiler/options.h"
-#include "library/native_compiler/native_compiler.h"
+#include "frontends/lean/util.h"
 #include "library/trace.h"
 #include "init/init.h"
 #include "shell/simple_pos_info_provider.h"
 #include "shell/leandoc.h"
+#ifdef _MSC_VER
+#include <io.h>
+#define STDOUT_FILENO 1
+#else
+#include <getopt.h>
+#include <unistd.h>
+#endif
 #if defined(LEAN_JSON)
 #include "shell/server.h"
 #endif
 #if defined(LEAN_EMSCRIPTEN)
 #include <emscripten.h>
 #endif
-#include "version.h"
 #include "githash.h" // NOLINT
+
+#ifdef _MSC_VER
+// extremely simple implementation of getopt.h
+enum arg_opt { no_argument, required_argument, optional_argument };
+
+struct option {
+    const char name[12];
+    arg_opt has_arg;
+    int *flag;
+    char val;
+};
+
+static char *optarg;
+static int optind = 1;
+
+int getopt_long(int argc, char *in_argv[], const char *optstring, const option *opts, int *index) {
+    optarg = nullptr;
+    if (optind >= argc)
+        return -1;
+
+    char *argv = in_argv[optind];
+    if (argv[0] != '-') {
+        // find first -opt if any
+        int i = optind;
+        bool found = false;
+        for (; i < argc; ++i) {
+            if (in_argv[i][0] == '-') {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return -1;
+        auto next = in_argv[i];
+        // FIXME: this doesn't account for long options with arguments like --foo arg
+        memmove(&in_argv[optind + 1], &in_argv[optind], (i - optind) * sizeof(argv));
+        argv = in_argv[optind] = next;
+    }
+    ++optind;
+
+    // long option
+    if (argv[1] == '-') {
+        auto eq = strchr(argv, '=');
+        size_t sz = (eq ? (eq - argv) : strlen(argv)) - 2;
+        for (auto I = opts; *I->name; ++I) {
+            if (!strncmp(I->name, argv + 2, sz) && I->name[sz] == '\0') {
+                assert(!I->flag);
+                switch (I->has_arg) {
+                case no_argument:
+                    if (eq) {
+                        std::cerr << in_argv[0] << ": option doesn't take an argument -- " << I->name << std::endl;
+                        return '?';
+                    }
+                    break;
+                case required_argument:
+                    if (eq) {
+                        optarg = eq + 1;
+                    } else {
+                        if (optind >= argc) {
+                            std::cerr << in_argv[0] << ": option requires an argument -- " << I->name << std::endl;
+                            return '?';
+                        }
+                        optarg = in_argv[optind++];
+                    }
+                    break;
+                case optional_argument:
+                    if (eq) {
+                        optarg = eq + 1;
+                    }
+                    break;
+                }
+                if (index)
+                  *index = I - opts;
+                return I->val;
+            }
+        }
+        return '?';
+    } else {
+        auto opt = strchr(optstring, argv[1]);
+        if (!opt)
+            return '?';
+
+        if (opt[1] == ':') {
+            if (argv[2] == '\0') {
+                if (optind < argc) {
+                    optarg = in_argv[optind++];
+                } else {
+                    std::cerr << in_argv[0] << ": option requires an argument -- " << *opt << std::endl;
+                    return '?';
+                }
+            } else {
+                optarg = argv + 2;
+            }
+        }
+        return *opt;
+    }
+}
+#endif
 
 using namespace lean; // NOLINT
 
@@ -75,22 +178,11 @@ using namespace lean; // NOLINT
 #endif
 
 static void display_header(std::ostream & out) {
-    out << "Lean (version " << LEAN_VERSION_MAJOR << "."
-        << LEAN_VERSION_MINOR << "." << LEAN_VERSION_PATCH;
-    if (std::strcmp(g_githash, "GITDIR-NOTFOUND") == 0) {
-        if (std::strcmp(LEAN_PACKAGE_VERSION, "NOT-FOUND") != 0) {
-            out << ", package " << LEAN_PACKAGE_VERSION;
-        }
-    } else {
-        out << ", commit " << std::string(g_githash).substr(0, 12);
-    }
-    out << ", " << LEAN_STR(LEAN_BUILD_TYPE) << ")\n";
+    out << "Lean (version " << get_version_string() << ", " << LEAN_STR(LEAN_BUILD_TYPE) << ")\n";
 }
 
 static void display_help(std::ostream & out) {
     display_header(out);
-    std::cout << "Input format:\n";
-    std::cout << "  --smt2             interpret files as SMT-Lib2 files\n";
     std::cout << "Miscellaneous:\n";
     std::cout << "  --help -h          display this message\n";
     std::cout << "  --version -v       display version number\n";
@@ -132,7 +224,6 @@ static struct option g_long_options[] = {
     {"version",      no_argument,       0, 'v'},
     {"help",         no_argument,       0, 'h'},
     {"run",          required_argument, 0, 'a'},
-    {"smt2",         no_argument,       0, 'Y'},
     {"githash",      no_argument,       0, 'g'},
     {"make",         no_argument,       0, 'm'},
     {"recursive",    no_argument,       0, 'R'},
@@ -145,9 +236,6 @@ static struct option g_long_options[] = {
     {"quiet",        no_argument,       0, 'q'},
     {"deps",         no_argument,       0, 'd'},
     {"test-suite",   no_argument,       0, 'e'},
-#if defined(LEAN_USE_ALPHA)
-    {"compile",      optional_argument, 0, 'C'},
-#endif
     {"timeout",      optional_argument, 0, 'T'},
 #if defined(LEAN_JSON)
     {"json",         no_argument,       0, 'J'},
@@ -354,8 +442,6 @@ int main(int argc, char ** argv) {
     bool make_mode          = false;
     bool recursive          = false;
     unsigned trust_lvl      = LEAN_BELIEVER_TRUST_LEVEL+1;
-    bool smt2               = false;
-    bool compile            = false;
     bool only_deps          = false;
     bool test_suite         = false;
     unsigned num_threads    = 0;
@@ -387,16 +473,13 @@ int main(int argc, char ** argv) {
             display_header(std::cout);
             return 0;
         case 'g':
-            std::cout << g_githash << "\n";
+            std::cout << LEAN_GITHASH << "\n";
             return 0;
         case 'h':
             display_help(std::cout);
             return 0;
         case 'a':
             run_arg = optarg;
-            break;
-        case 'Y':
-            smt2 = true;
             break;
         case 's':
             lean::lthread::set_thread_stack_size(static_cast<size_t>((atoi(optarg)/4)*4)*static_cast<size_t>(1024));
@@ -411,11 +494,6 @@ int main(int argc, char ** argv) {
         case 'n':
             native_output         = optarg;
             break;
-#if defined(LEAN_USE_ALPHA)
-        case 'C':
-            compile = true;
-            break;
-#endif
         case 'r':
             doc = optarg;
             break;
@@ -531,7 +609,8 @@ int main(int argc, char ** argv) {
 
     log_tree lt;
 
-    progress_message_stream msg_stream(std::cout, json_output, make_mode, lt.get_root());
+    bool show_progress = make_mode && isatty(STDOUT_FILENO);
+    progress_message_stream msg_stream(std::cout, json_output, show_progress, lt.get_root());
     if (json_output) ios.set_regular_channel(ios.get_diagnostic_channel_ptr());
 
     if (!test_suite)
@@ -540,24 +619,6 @@ int main(int argc, char ** argv) {
     scope_log_tree_core scope_lt(&lt_root);
 
     scope_global_ios scope_ios(ios);
-
-    if (smt2) {
-        // Note: the smt2 flag may override other flags
-        bool ok = true;
-        for (int i = optind; i < argc; i++) {
-            try {
-                if (doc) throw lean::exception("leandoc does not support .smt2 files");
-                ok = smt2::parse_commands(path.get_path(), env, ios, argv[i]);
-            } catch (lean::exception & ex) {
-                ok = false;
-                type_context tc(env, ios.get_options());
-                lean::message_builder(std::make_shared<type_context>(env, ios.get_options()),
-                                      env, ios, argv[i], pos_info(1, 1), lean::ERROR)
-                        .set_exception(ex).report();
-            }
-        }
-        return ok ? 0 : 1;
-    }
 
     try {
         std::shared_ptr<task_queue> tq;
@@ -581,14 +642,13 @@ int main(int argc, char ** argv) {
 
             auto main_env = get(get(mod->m_result).m_loaded_module->m_env);
             auto main_opts = get(mod->m_result).m_opts;
+            set_io_cmdline_args({argv + optind, argv + argc});
             eval_helper fn(main_env, main_opts, "main");
-            fn.set_cmdline_args({argv + optind, argv + argc});
 
-            type_context tc(main_env, main_opts);
+            type_context_old tc(main_env, main_opts);
             scope_trace_env scope2(main_env, main_opts, tc);
 
             try {
-                fn.dependency_injection();
                 if (fn.try_exec()) {
                     return 0;
                 } else {
@@ -684,16 +744,7 @@ int main(int argc, char ** argv) {
             }
         }
 
-        // Options appear to be empty, pretty sure I'm making a mistake here.
-        if (compile && !mods.empty()) {
-            auto final_env = mods.front().m_mod_info->get_produced_env();
-            auto final_opts = get(mods.front().m_mod_info->m_result).m_opts;
-            type_context tc(final_env, final_opts);
-            lean::scope_trace_env scope2(final_env, final_opts, tc);
-            lean::native::scope_config scoped_native_config(
-                final_opts);
-            native_compile_binary(final_env, final_env.get(lean::name("main")));
-        }
+        display_cumulative_profiling_times(std::cerr);
 
         // if (!mods.empty() && export_native_objects) {
         //     // this code is now broken

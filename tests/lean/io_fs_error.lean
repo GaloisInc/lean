@@ -1,19 +1,19 @@
 import system.io
 open io
-variable [io.interface]
+
 
 def tst1 : io unit :=
-do out ← stdout,
+do o ← stdout,
    -- fs.put_str_ln out "hello",
-   fs.close out
+   fs.close o
 
 #eval tst1
 #eval tst1
 
 def tst2 : io unit :=
-do out ← stderr,
+do o ← stderr,
    -- fs.put_str_ln out "world",
-   fs.close out
+   fs.close o
 
 #eval tst2
 

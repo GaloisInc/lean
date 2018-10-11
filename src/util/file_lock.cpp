@@ -5,19 +5,20 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Leonardo de Moura
 */
 #include <string>
-#include <sys/file.h>
 #include <errno.h>
+#include <fcntl.h>
 #include "util/exception.h"
 #include "util/sstream.h"
 #include "util/file_lock.h"
 
-#ifdef LEAN_WINDOWS
+#if defined(LEAN_WINDOWS) && !defined(LEAN_CYGWIN)
 #include <windows.h>
 #include <io.h>
 #define   LOCK_SH   1    /* shared lock */
 #define   LOCK_EX   2    /* exclusive lock */
 #define   LOCK_NB   4    /* don't block when locking */
 #define   LOCK_UN   8    /* unlock */
+#define   O_CREAT  _O_CREAT
 
 static BOOL lock(HANDLE h, int non_blocking, int exclusive) {
     DWORD lower, upper;
@@ -68,8 +69,8 @@ int flock(int fd, int op) {
     return !res ? -1 : 0;
 }
 #else
+#include <sys/file.h>
 #include <unistd.h>
-#include <fcntl.h>
 #endif
 
 namespace lean {
@@ -96,13 +97,13 @@ file_lock::file_lock(char const * fname, bool exclusive):
 file_lock::~file_lock() {
 #if !defined(LEAN_EMSCRIPTEN)
     if (m_fd != -1) {
-#if !defined(LEAN_WINDOWS)
+#if !defined(LEAN_WINDOWS) || defined(LEAN_CYGWIN)
         /* On Windows, we cannot remove the file if it is locked. */
         std::remove(m_fname.c_str());
 #endif
         flock(m_fd, LOCK_UN);
         close(m_fd);
-#if defined(LEAN_WINDOWS)
+#if defined(LEAN_WINDOWS) && !defined(LEAN_CYGWIN)
         /* On Windows, we (to) to remove the file after we released the lock. The operation will fail if another
            process has a handle to it. However, this is better than always keeping all .lock files. */
         std::remove(m_fname.c_str());

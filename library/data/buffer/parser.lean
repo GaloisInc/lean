@@ -4,17 +4,15 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Gabriel Ebner
 -/
 import data.buffer data.dlist
-universes u v
 
-inductive parse_result (α : Type u)
+inductive parse_result (α : Type)
 | done (pos : ℕ) (result : α) : parse_result
 | fail (pos : ℕ) (expected : dlist string) : parse_result
 
-def parser (α : Type u) :=
+def parser (α : Type) :=
 ∀ (input : char_buffer) (start : ℕ), parse_result α
 
 namespace parser
--- Type polymorphism is restricted here because of monad.bind
 variables {α β γ : Type}
 
 protected def bind (p : parser α) (f : α → parser β) : parser β :=
@@ -26,7 +24,7 @@ end
 protected def pure (a : α) : parser α :=
 λ input pos, parse_result.done pos a
 
-private lemma id_map (p : parser α) : parser.bind p parser.pure = p :=
+private lemma parser.id_map (p : parser α) : parser.bind p parser.pure = p :=
 begin
 apply funext, intro input,
 apply funext, intro pos,
@@ -34,7 +32,7 @@ dunfold parser.bind,
 cases (p input pos); exact rfl
 end
 
-private lemma bind_assoc (p : parser α) (q : α → parser β) (r : β → parser γ) :
+private lemma parser.bind_assoc (p : parser α) (q : α → parser β) (r : β → parser γ) :
   parser.bind (parser.bind p q) r = parser.bind p (λ a, parser.bind (q a) r) :=
 begin
 apply funext, intro input,
@@ -48,13 +46,16 @@ end
 protected def fail (msg : string) : parser α :=
 λ _ pos, parse_result.fail α pos (dlist.singleton msg)
 
-instance : monad_fail parser :=
-{ pure := @parser.pure,
-  bind := @parser.bind,
-  fail := @parser.fail,
-  id_map := @id_map,
+instance : monad parser :=
+{ pure := @parser.pure, bind := @parser.bind }
+
+instance : is_lawful_monad parser :=
+{ id_map := @parser.id_map,
   pure_bind := λ _ _ _ _, rfl,
-  bind_assoc := @bind_assoc }
+  bind_assoc := @parser.bind_assoc }
+
+instance : monad_fail parser :=
+{ fail := @parser.fail, ..parser.monad }
 
 protected def failure : parser α :=
 λ _ pos, parse_result.fail α pos dlist.empty
@@ -77,8 +78,7 @@ protected def orelse (p q : parser α) : parser α :=
 end
 
 instance : alternative parser :=
-{ parser.monad_fail with
-  failure := @parser.failure,
+{ failure := @parser.failure,
   orelse := @parser.orelse }
 
 instance : inhabited (parser α) :=

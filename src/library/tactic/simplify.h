@@ -26,6 +26,8 @@ structure simp_config :=
 (eta  : bool)
 (proj : bool)
 (iota : bool)
+(iota_eqn : bool)
+(constructor_eq : bool)
 (single_pass : bool)
 (fail_if_unchaged : bool)
 (memoize : bool)
@@ -42,6 +44,8 @@ struct simp_config {
     bool                      m_eta;
     bool                      m_proj;
     bool                      m_iota;
+    bool                      m_iota_eqn;
+    bool                      m_constructor_eq;
     bool                      m_single_pass;
     bool                      m_fail_if_unchanged;
     bool                      m_memoize;
@@ -70,9 +74,9 @@ struct simp_config {
 */
 class simplify_core_fn {
 protected:
-    typedef expr_struct_map<simp_result> simplify_cache;
+    typedef expr_map<simp_result> simplify_cache;
 
-    type_context              m_ctx;
+    type_context_old &        m_ctx;
     defeq_canonizer           m_defeq_canonizer;
     name                      m_rel;
     simp_lemmas               m_slss;
@@ -91,8 +95,8 @@ protected:
     bool should_defeq_canonize() const {
         return m_cfg.m_canonize_instances || m_cfg.m_canonize_proofs;
     }
-    bool instantiate_emetas(tmp_type_context & tmp_tctx, unsigned num_emeta,
-                            list<expr> const & emetas, list<bool> const & instances);
+    bool instantiate_emetas(tmp_type_context & tmp_tctx, list <expr> const & emetas,
+                                list<bool> const & instances);
     simp_result lift_from_eq(simp_result const & r_eq);
     simp_lemmas add_to_slss(simp_lemmas const & slss, buffer<expr> const & ls);
     expr remove_unnecessary_casts(expr const & e);
@@ -118,11 +122,18 @@ protected:
     simp_result rewrite_core(expr const & e, simp_lemma const & sl);
     simp_result propext_rewrite(expr const & e);
 
+    /* Simplify equalities of the form (c ... = c' ...) where `c` and `c'` are
+       constructors.
+
+       Return true if `r` was simplified. */
+    bool simplify_constructor_eq_constructor(simp_result & r);
+
     /* Visitors */
     virtual optional<pair<simp_result, bool>> pre(expr const & e, optional<expr> const & parent);
     virtual optional<pair<simp_result, bool>> post(expr const & e, optional<expr> const & parent);
 
     virtual optional<expr> prove(expr const & goal);
+    friend class simp_prover;
 
     simp_result visit_fn(expr const & e);
     virtual simp_result visit_lambda(expr const & e);
@@ -142,7 +153,7 @@ protected:
     bool match(tmp_type_context & ctx, simp_lemma const & sl, expr const & t);
 
 public:
-    simplify_core_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss,
+    simplify_core_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss,
                      simp_config const & cfg);
 
     environment const & env() const;
@@ -162,7 +173,7 @@ protected:
     virtual simp_result visit_let(expr const & e) override;
     virtual simp_result visit_macro(expr const & e) override;
 public:
-    simplify_ext_core_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss,
+    simplify_ext_core_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss,
                          simp_config const & cfg);
 };
 
@@ -175,7 +186,7 @@ protected:
     virtual optional<pair<simp_result, bool>> post(expr const & e, optional<expr> const & parent) override;
     virtual optional<expr> prove(expr const & e) override;
 public:
-    simplify_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, list<name> const & to_unfold,
+    simplify_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, list<name> const & to_unfold,
                 simp_config const & cfg):
         simplify_ext_core_fn(ctx, dcs, slss, cfg),
         m_to_unfold(to_name_set(to_unfold)) {}

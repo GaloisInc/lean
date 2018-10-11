@@ -23,7 +23,7 @@ meta def execute (c : conv unit) : tactic unit :=
 c
 
 meta def solve1 (c : conv unit) : conv unit :=
-tactic.solve1 $ c >> tactic.repeat tactic.reflexivity
+tactic.solve1 $ c >> tactic.try (tactic.any_goals tactic.reflexivity)
 
 namespace interactive
 open lean
@@ -81,7 +81,7 @@ do (r, lhs, _) ← tactic.target_lhs_rhs,
        (λ u, return u)
        (λ found s r p e, do
          guard (not found),
-         matched ← (tactic.match_pattern_core reducible pat e >> return tt) <|> return ff,
+         matched ← (tactic.match_pattern pat e >> return tt) <|> return ff,
          guard matched,
          ⟨new_e, pr⟩ ← c.convert e r,
          return (tt, new_e, pr, ff))
@@ -99,7 +99,7 @@ do (r, lhs, _) ← tactic.target_lhs_rhs,
                                  proj := ff, fail_if_unchanged := ff, memoize := ff} s
        (λ u, return u)
        (λ i s r p e, do
-         matched ← (tactic.match_pattern_core reducible pat e >> return tt) <|> return ff,
+         matched ← (tactic.match_pattern pat e >> return tt) <|> return ff,
          guard matched,
          if i ∈ occs then do
            ⟨new_e, pr⟩ ← c.convert e r,
@@ -135,8 +135,8 @@ rs.mmap' $ λ r, do
  save_info r.pos,
  eq_lemmas ← get_rule_eqn_lemmas r,
  orelse'
-   (do h ← to_expr' r.rule, rw_lhs h {cfg with symm := r.symm})
-   (eq_lemmas.mfirst $ λ n, do e ← tactic.mk_const n, rw_lhs e {cfg with symm := r.symm})
+   (do h ← to_expr' r.rule, rw_lhs h {symm := r.symm, ..cfg})
+   (eq_lemmas.mfirst $ λ n, do e ← tactic.mk_const n, rw_lhs e {symm := r.symm, ..cfg})
    (eq_lemmas.empty)
 
 meta def rewrite (q : parse rw_rules) (cfg : rewrite_cfg := {}) : conv unit :=

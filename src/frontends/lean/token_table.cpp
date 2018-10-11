@@ -91,7 +91,7 @@ void init_token_table(token_table & t) {
          {"Type", g_max_prec}, {"Type*", g_max_prec}, {"Sort", g_max_prec}, {"Sort*", g_max_prec},
          {"(:", g_max_prec}, {":)", 0}, {".(", g_max_prec}, {"._", g_max_prec},
          {"⟨", g_max_prec}, {"⟩", 0}, {"^", 0},
-         {"//", 0}, {"|", 0}, {"with", 0}, {"without", 0}, {"...", 0}, {",", 0},
+         {"//", 0}, {"|", 0}, {"with", 0}, {"without", 0}, {"..", 0}, {"...", 0}, {",", 0},
          {".", 0}, {":", 0}, {"!", 0}, {"calc", 0}, {":=", 0}, {"--", 0}, {"#", g_max_prec},
          {"/-", 0}, {"/--", 0}, {"/-!", 0}, {"begin", g_max_prec}, {"using", 0},
          {"@@", g_max_prec}, {"@", g_max_prec},
@@ -100,8 +100,8 @@ void init_token_table(token_table & t) {
          {"renaming", 0}, {"extends", 0}, {nullptr, 0}};
 
     char const * commands[] =
-        {"theorem", "axiom", "axioms", "variable", "protected", "private",
-         "definition", "meta", "mutual", "example", "noncomputable",
+        {"theorem", "axiom", "axioms", "variable", "protected", "private", "hide",
+         "definition", "meta", "mutual", "example", "noncomputable", "abbreviation",
          "variables", "parameter", "parameters", "constant", "constants",
          "using_well_founded", "[whnf]",
          "end", "namespace", "section", "prelude",

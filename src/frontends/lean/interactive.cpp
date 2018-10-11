@@ -30,7 +30,7 @@ namespace lean {
 LEAN_THREAD_VALUE(break_at_pos_exception::token_context, g_context, break_at_pos_exception::token_context::none);
 
 void interactive_report_type(environment const & env, options const & opts, expr const & e, json & j) {
-    type_context tc(env);
+    type_context_old tc(env);
     if (g_context == break_at_pos_exception::token_context::interactive_tactic) {
         vm_state vm(env, options());
         tactic_state s = mk_tactic_state_for(env, opts, "_interactive_report_type", local_context(), mk_true());
@@ -40,7 +40,7 @@ void interactive_report_type(environment const & env, options const & opts, expr
             vm_obj r = vm.invoke(get_interactive_param_desc_name(), {to_obj(s), to_obj(binding_domain(d))});
             format f;
             if (tactic::is_result_success(r))
-                f = to_format(tactic::get_result_value(r));
+                f = to_format(tactic::get_success_value(r));
             else
                 f = format("<error while executing ") + format(get_interactive_param_desc_name()) + format(": ") +
                     std::get<0>(*tactic::is_exception(vm, r)) + format(">");
@@ -129,7 +129,7 @@ void report_info(environment const & env, options const & opts, io_state const &
             case break_at_pos_exception::token_context::import: {
                 auto parsed = parse_import(tk.to_string());
                 try {
-                    auto base_dir = dirname(m_mod_info.m_mod);
+                    auto base_dir = dirname(m_mod_info.m_id);
                     auto f = find_file(path, base_dir, parsed.first, string_to_name(parsed.second),
                                        ".lean");
                     record["source"]["file"] = f;
@@ -164,7 +164,7 @@ void report_info(environment const & env, options const & opts, io_state const &
     }
 
     for (auto & infom : info_managers) {
-        if (infom.get_file_name() == m_mod_info.m_mod) {
+        if (infom.get_file_name() == m_mod_info.m_id) {
             if (e.m_goal_pos) {
                 infom.get_info_record(env, opts, ios, *e.m_goal_pos, record, [](info_data const & d) {
                             return dynamic_cast<vm_obj_format_info const *>(d.raw());
@@ -194,7 +194,7 @@ optional<info_data> find_hole(module_info const & m_mod_info,
                               pos_info const & pos) {
     optional<info_data> r;
     for (auto & infom : info_managers) {
-        if (infom.get_file_name() == m_mod_info.m_mod) {
+        if (infom.get_file_name() == m_mod_info.m_id) {
             unsigned line = pos.first;
             while (true) {
                 line_info_data_set S = infom.get_line_info_set(line);
@@ -221,7 +221,7 @@ optional<info_data> find_hole(module_info const & m_mod_info,
 }
 
 bool execute_hole_command(tactic_state s, name const & cmd_decl_name, expr const & args, json & j) {
-    type_context ctx = mk_type_context_for(s);
+    type_context_old ctx = mk_type_context_for(s);
     options opts     = s.get_options();
     opts = opts.update_if_undef(get_pp_use_holes_name(), true);
     s = set_options(s, opts);
@@ -248,7 +248,7 @@ bool execute_hole_command(tactic_state s, name const & cmd_decl_name, expr const
         if (!msg.empty())
             j["message"] = msgs.get_string();
         std::vector<json> as;
-        vm_obj l     = tactic::get_result_value(r);
+        vm_obj l     = tactic::get_success_value(r);
         while (cidx(l) != 0) {
             lean_assert(cidx(l) == 1);
             vm_obj p = cfield(l, 0);
@@ -297,7 +297,7 @@ void get_hole_commands(module_info const & m_mod_info,
         return;
     }
     hole_info_data const & hole = to_hole_info_data(*info);
-    if (!json_of_hole(hole, m_mod_info.m_mod, j)) {
+    if (!json_of_hole(hole, m_mod_info.m_id, j)) {
         j["message"] = "hole commands are not available";
         return;
     }
@@ -308,13 +308,13 @@ void get_all_hole_commands(module_info const & m_mod_info,
                            json & j) {
     std::vector<json> holes;
     for (auto & infom : info_managers) {
-        if (infom.get_file_name() == m_mod_info.m_mod) {
+        if (infom.get_file_name() == m_mod_info.m_id) {
             infom.get_line_info_sets().for_each([&](unsigned, line_info_data_set const & S) {
                 S.for_each([&](unsigned, list<info_data> const & info_list) {
                     for (info_data const & info : info_list) {
                         if (hole_info_data const * hole = is_hole_info_data(info)) {
                             json j;
-                            if (json_of_hole(*hole, m_mod_info.m_mod, j)) {
+                            if (json_of_hole(*hole, m_mod_info.m_id, j)) {
                                 holes.push_back(j);
                             }
                         }
@@ -342,7 +342,7 @@ void execute_hole_command(module_info const & m_mod_info,
         return;
     }
     if (execute_hole_command(s, *cmd_decl_name, hole.get_args(), j)) {
-        j["replacements"]["file"] = m_mod_info.m_mod;
+        j["replacements"]["file"] = m_mod_info.m_id;
         j["replacements"]["start"]["line"]   = hole.get_begin_pos().first;
         j["replacements"]["start"]["column"] = hole.get_begin_pos().second;
         j["replacements"]["end"]["line"]     = hole.get_end_pos().first;

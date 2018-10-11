@@ -12,7 +12,7 @@ Author: Leonardo de Moura
 #include "util/lbool.h"
 #include "util/flet.h"
 #include "util/name_set.h"
-#include "util/fresh_name.h"
+#include "util/name_generator.h"
 #include "kernel/environment.h"
 #include "kernel/expr_pair.h"
 #include "kernel/expr_maps.h"
@@ -27,14 +27,15 @@ class type_checker : public abstract_type_context {
        Examples:
        The type of (lambda x : A, t)   is (Pi x : A, typeof(t))
        The type of (lambda {x : A}, t) is (Pi {x : A}, typeof(t)) */
-    typedef expr_bi_struct_map<expr> cache;
+    typedef expr_bi_map<expr> cache;
     typedef std::unordered_set<expr_pair, expr_pair_hash, expr_pair_eq> expr_pair_set;
     environment               m_env;
+    name_generator            m_name_generator;
     bool                      m_memoize;
     bool                      m_trusted_only;
     cache                     m_infer_type_cache[2];
-    expr_struct_map<expr>     m_whnf_core_cache;
-    expr_struct_map<expr>     m_whnf_cache;
+    expr_map<expr>            m_whnf_core_cache;
+    expr_map<expr>            m_whnf_cache;
     equiv_manager             m_eqv_manager;
     expr_pair_set             m_failure_cache;
     level_param_names const * m_params;
@@ -84,6 +85,8 @@ public:
 
     virtual environment const & env() const { return m_env; }
 
+    virtual name next_name() { return m_name_generator.next(); }
+
     /** \brief Return the type of \c t.
         It does not check whether the input expression is type correct or not.
         The contract is: IF the input expression is type correct, then the inferred
@@ -97,6 +100,8 @@ public:
     /** \brief Like \c check, but ignores undefined universes */
     expr check_ignore_undefined_universes(expr const & e);
     virtual expr check(expr const & t) { return check_ignore_undefined_universes(t); }
+
+    virtual bool is_trusted_only() const { return m_trusted_only; }
 
     /** \brief Return true iff t is definitionally equal to s. */
     virtual bool is_def_eq(expr const & t, expr const & s);
@@ -139,6 +144,7 @@ public:
 typedef std::shared_ptr<type_checker> type_checker_ref;
 
 void check_no_metavar(environment const & env, name const & n, expr const & e, bool is_type);
+void check_no_mlocal(environment const & env, name const & n, expr const & e, bool is_type);
 
 /** \brief Type check the given declaration, and return a certified declaration if it is type correct.
     Throw an exception if the declaration is type incorrect. */

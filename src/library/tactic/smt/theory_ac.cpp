@@ -15,7 +15,7 @@ Author: Leonardo de Moura
 
 namespace lean {
 /* Given e and ac_term that is provably equal to e using AC, return a proof for e = ac_term */
-static expr mk_ac_refl_proof(type_context & ctx, expr const & e, expr const & ac_term, expr const & assoc, expr const & comm) {
+static expr mk_ac_refl_proof(type_context_old & ctx, expr const & e, expr const & ac_term, expr const & assoc, expr const & comm) {
     return mk_perm_ac_macro(ctx, assoc, comm, e, ac_term);
 }
 
@@ -23,7 +23,7 @@ static expr mk_ac_refl_proof(type_context & ctx, expr const & e, expr const & ac
    tr = sr
 
    We use a*b to denote an AC application. That is, (a*b)*(c*a) is the term (a*a*b*c). */
-static expr mk_ac_simp_proof(type_context & ctx, expr const & tr, expr const & t, expr const & s, expr const & r, expr const & sr,
+static expr mk_ac_simp_proof(type_context_old & ctx, expr const & tr, expr const & t, expr const & s, expr const & r, expr const & sr,
                              expr const & t_eq_s, expr const & assoc, expr const & comm) {
     if (tr == t) {
         return t_eq_s;
@@ -48,7 +48,7 @@ static expr mk_ac_simp_proof(type_context & ctx, expr const & tr, expr const & t
    We use a*b to denote an AC application. That is, (a*b)*(c*a) is the term (a*a*b*c).
 
    The proof is constructed using congruence and the perm_ac macro. */
-static expr mk_ac_superpose_proof(type_context & ctx,
+static expr mk_ac_superpose_proof(type_context_old & ctx,
                                   expr const & ra, expr const & sb,
                                   expr const & a, expr const & b,
                                   expr const & r, expr const & s,
@@ -145,7 +145,7 @@ optional<expr> theory_ac::is_ac(expr const & e) {
         return some_expr(*it);
     optional<expr> found_op;
     m_state.m_op_info.for_each([&](expr const & c_op, expr_pair const &) {
-            if (!found_op && m_ctx.nd_relaxed_is_def_eq(op, c_op))
+            if (!found_op && m_ctx.pure_relaxed_is_def_eq(op, c_op))
                 found_op = c_op;
         });
     if (found_op) {
@@ -352,7 +352,7 @@ expr theory_ac::state::get_var_with_least_occs(expr const & e, bool in_lhs) cons
     }
 }
 
-void theory_ac::compose(expr const & lhs, expr const & rhs, expr const & H) {
+void theory_ac::compose_expr(expr const & lhs, expr const & rhs, expr const & H) {
     expr x           = m_state.get_var_with_least_rhs_occs(lhs);
     occurrences occs = m_state.m_entries.find(x)->get_R_rhs_occs();
     occs.for_each([&](expr const & R_lhs) {
@@ -488,7 +488,7 @@ void theory_ac::process() {
         }
 
         /* Backward simplification */
-        compose(lhs, rhs, H);
+        compose_expr(lhs, rhs, H);
         collapse(lhs, rhs, H);
 
         /* Superposition */

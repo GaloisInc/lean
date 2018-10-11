@@ -42,7 +42,7 @@ class eta_expand_fn : public compiler_step_visitor {
         expr type = ctx().relaxed_whnf(ctx().infer(e));
         if (!is_pi(type))
             return false;
-        type_context::tmp_locals locals(ctx());
+        type_context_old::tmp_locals locals(ctx());
         while (is_pi(type)) {
             expr local = locals.push_local_from_binding(type);
             type       = ctx().relaxed_whnf(instantiate(binding_body(type), local));
@@ -190,10 +190,11 @@ class eta_expand_fn : public compiler_step_visitor {
     }
 
 public:
-    eta_expand_fn(environment const & env):compiler_step_visitor(env) {}
+    eta_expand_fn(environment const & env, abstract_context_cache & cache):
+        compiler_step_visitor(env, cache) {}
 };
 
-expr eta_expand(environment const & env, expr const & e) {
-    return eta_expand_fn(env)(e);
+expr eta_expand(environment const & env, abstract_context_cache & cache, expr const & e) {
+    return eta_expand_fn(env, cache)(e);
 }
 }

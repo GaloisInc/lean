@@ -9,6 +9,7 @@ Author: Leonardo de Moura
 #include "util/name_set.h"
 #include "util/subscripted_name_set.h"
 #include "kernel/expr.h"
+#include "library/local_instances.h"
 
 namespace lean {
 class local_decl {
@@ -82,15 +83,13 @@ class metavar_context;
 class local_context {
     typedef unsigned_map<local_decl> idx2local_decl;
     typedef rb_tree<unsigned, unsigned_cmp> unsigned_set;
-    unsigned               m_next_idx;
-    name_map<local_decl>   m_name2local_decl;
-    subscripted_name_set   m_user_names;
-    name_map<unsigned_set> m_user_name2idxs;
-    idx2local_decl         m_idx2local_decl;
-    optional<unsigned>     m_instance_fingerprint;
-    friend class type_context;
-    /* Return the instance fingerprint for empty local_contexts */
-    static unsigned get_empty_instance_fingerprint() { return 31; }
+    unsigned                  m_next_idx;
+    name_map<local_decl>      m_name2local_decl;
+    subscripted_name_set      m_user_names;
+    name_map<unsigned_set>    m_user_name2idxs;
+    idx2local_decl            m_idx2local_decl;
+    optional<local_instances> m_local_instances;
+    friend class type_context_old;
 
     void insert_user_name(local_decl const &d);
     void erase_user_name(local_decl const &d);
@@ -105,14 +104,9 @@ class local_context {
 public:
     local_context():m_next_idx(0) {}
 
-    /* Return an empty local context with instance fingerprint set. */
-    static local_context mk_with_instance_fingerprint() {
-        local_context lctx;
-        lctx.m_instance_fingerprint = optional<unsigned>(get_empty_instance_fingerprint());
-        return lctx;
-    }
-
-    optional<unsigned> get_instance_fingerprint() const { return m_instance_fingerprint; }
+    void freeze_local_instances(local_instances const & lis);
+    void unfreeze_local_instances();
+    optional<local_instances> get_frozen_local_instances() const { return m_local_instances; }
 
     bool empty() const { return m_idx2local_decl.empty(); }
 

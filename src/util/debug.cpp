@@ -13,11 +13,12 @@ Author: Leonardo de Moura
 #if defined(LEAN_EMSCRIPTEN)
 #include <emscripten.h>
 #endif
-#ifndef _WINDOWS
+#if !defined(LEAN_WINDOWS) || defined(LEAN_CYGWIN)
 // Support for pid
 #include<unistd.h>
 #endif
 #include "util/debug.h"
+#include "util/log_tree.h"
 
 namespace lean {
 static volatile bool           g_has_violations     = false;
@@ -48,6 +49,8 @@ void notify_assertion_violation(const char * fileName, int line, const char * co
     std::cerr << "LEAN ASSERTION VIOLATION\n";
     std::cerr << "File: " << fileName << "\n";
     std::cerr << "Line: " << line << "\n";
+    if (has_logtree())
+        std::cerr << "Task: " << logtree().get_location().m_file_name << ": " << logtree().get_description() << "\n";
     std::cerr << condition << "\n";
     std::cerr.flush();
 }
@@ -90,11 +93,11 @@ void invoke_debugger() {
     for (;;) {
         if (std::cin.eof())
             debuggable_exit();
-        #ifdef _WINDOWS
+#if !defined(LEAN_WINDOWS) || defined(LEAN_CYGWIN)
         std::cerr << "(C)ontinue, (A)bort/exit, (S)top/trap\n";
-        #else
+#else
         std::cerr << "(C)ontinue, (A)bort/exit, (S)top/trap, Invoke (G)DB\n";
-        #endif
+#endif
         char result;
         std::cin >> result;
         if (std::cin.eof())
@@ -110,7 +113,7 @@ void invoke_debugger() {
         case 's':
             // force seg fault...
             debuggable_exit();
-        #ifndef _WINDOWS
+#if !defined(LEAN_WINDOWS) || defined(LEAN_CYGWIN)
         case 'G':
         case 'g': {
             std::cerr << "INVOKING GDB...\n";
@@ -125,7 +128,7 @@ void invoke_debugger() {
             }
             return;
         }
-        #endif
+#endif
         default:
             std::cerr << "INVALID COMMAND\n";
         }

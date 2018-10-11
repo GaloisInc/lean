@@ -25,16 +25,15 @@ Author: Leonardo de Moura
 #include "library/equations_compiler/util.h"
 
 namespace lean {
-#define trace_wf(Code) lean_trace(name({"eqn_compiler", "wf_rec"}), type_context ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
-#define trace_debug_wf(Code) lean_trace(name({"debug", "eqn_compiler", "wf_rec"}), type_context ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
+#define trace_wf(Code) lean_trace(name({"eqn_compiler", "wf_rec"}), type_context_old ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
+#define trace_debug_wf(Code) lean_trace(name({"debug", "eqn_compiler", "wf_rec"}), type_context_old ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
 #define trace_debug_wf_aux(Code) lean_trace(name({"debug", "eqn_compiler", "wf_rec"}), scope_trace_env _scope1(m_env, ctx); Code)
 
 struct wf_rec_fn {
     environment      m_env;
-    options          m_opts;
+    elaborator &     m_elab;
     metavar_context  m_mctx;
     local_context    m_lctx;
-    elaborator &     m_elab;
 
     expr             m_ref;
     equations_header m_header;
@@ -44,22 +43,25 @@ struct wf_rec_fn {
 
     expr             m_dec_tac;
 
-    wf_rec_fn(environment const & env, options const & opts,
-              metavar_context const & mctx, local_context const & lctx,
-              elaborator & elab):
-        m_env(env), m_opts(opts), m_mctx(mctx), m_lctx(lctx), m_elab(elab) {
+    wf_rec_fn(environment const & env, elaborator & elab,
+              metavar_context const & mctx, local_context const & lctx):
+        m_env(env), m_elab(elab), m_mctx(mctx), m_lctx(lctx) {
     }
 
-    type_context mk_type_context(local_context const & lctx) {
-        return type_context(m_env, m_opts, m_mctx, lctx, transparency_mode::Semireducible);
+    type_context_old mk_type_context(local_context const & lctx) {
+        return type_context_old(m_env, m_mctx, lctx, m_elab.get_cache(), transparency_mode::Semireducible);
     }
 
-    type_context mk_type_context() {
+    type_context_old mk_type_context() {
         return mk_type_context(m_lctx);
     }
 
+    options const & get_options() const {
+        return m_elab.get_options();
+    }
+
     expr pack_domain(expr const & eqns) {
-        type_context ctx = mk_type_context();
+        type_context_old ctx = mk_type_context();
         expr r = ::lean::pack_domain(ctx, eqns);
         m_env  = ctx.env();
         m_mctx = ctx.mctx();
@@ -67,7 +69,7 @@ struct wf_rec_fn {
     }
 
     expr pack_mutual(expr const & eqns) {
-        type_context ctx = mk_type_context();
+        type_context_old ctx = mk_type_context();
         expr r = ::lean::pack_mutual(ctx, eqns);
         m_env  = ctx.env();
         m_mctx = ctx.mctx();
@@ -76,7 +78,7 @@ struct wf_rec_fn {
 
     void mk_wf_relation(expr const & eqns, expr const & rel_tac) {
         lean_assert(get_equations_header(eqns).m_num_fns == 1);
-        type_context ctx = mk_type_context();
+        type_context_old ctx = mk_type_context();
         unpack_eqns ues(ctx, eqns);
         name fn_name = head(get_equations_header(eqns).m_fn_names);
         vm_obj vm_fn   = to_obj(ues.get_fn(0));
@@ -89,8 +91,8 @@ struct wf_rec_fn {
             lean_assert(is_pi(fn_type));
             expr d                = binding_domain(fn_type);
             expr has_well_founded = mk_app(ctx, get_has_well_founded_name(), d);
-            tactic_state s        = mk_tactic_state_for(m_env, m_opts, name(fn_name, "_wf_rec_mk_rel_tactic"), m_mctx, m_lctx, has_well_founded);
-            vm_obj r = tactic_evaluator(ctx, m_opts, m_ref)(rel_tac, extra_args, s);
+            tactic_state s        = mk_tactic_state_for(m_env, get_options(), name(fn_name, "_wf_rec_mk_rel_tactic"), m_mctx, m_lctx, has_well_founded);
+            vm_obj r = tactic_evaluator(ctx, get_options(), m_ref)(rel_tac, extra_args, s);
             if (auto new_s = tactic::is_success(r)) {
                 metavar_context mctx = new_s->mctx();
                 bool postpone_push_delayed = true;
@@ -117,8 +119,8 @@ struct wf_rec_fn {
     }
 
     /* Return the type of the functional. */
-    expr mk_new_fn_type(type_context & ctx, unpack_eqns const & ues) {
-        type_context::tmp_locals locals(ctx);
+    expr mk_new_fn_type(type_context_old & ctx, unpack_eqns const & ues) {
+        type_context_old::tmp_locals locals(ctx);
         expr fn        = ues.get_fn(0);
         expr fn_type   = ctx.relaxed_whnf(ctx.infer(fn));
         lean_assert(ues.get_arity_of(0) == 1);
@@ -139,7 +141,7 @@ struct wf_rec_fn {
         expr        m_x;
         expr        m_F;
 
-        elim_rec_apps_fn(wf_rec_fn & parent, type_context & ctx, name const & fn_name, expr const & fn, expr const & x, expr const & F):
+        elim_rec_apps_fn(wf_rec_fn & parent, type_context_old & ctx, name const & fn_name, expr const & fn, expr const & x, expr const & F):
             replace_visitor_with_tc(ctx), m_parent(parent), m_fn_name(fn_name), m_fn(fn), m_x(x), m_F(F) {}
 
         virtual expr visit_local(expr const & e) {
@@ -155,10 +157,10 @@ struct wf_rec_fn {
             expr y_R_x = mk_app(m_parent.m_R, y, m_x);
 
             metavar_context mctx = m_ctx.mctx();
-            tactic_state s = mk_tactic_state_for(m_parent.m_env, m_parent.m_opts,
+            tactic_state s = mk_tactic_state_for(m_parent.m_env, m_parent.get_options(),
                                                  name(m_fn_name, "_wf_rec_mk_dec_tactic"), mctx, m_ctx.lctx(), y_R_x);
             try {
-                vm_obj r = tactic_evaluator(m_ctx, m_parent.m_opts, ref)(m_parent.m_dec_tac, s);
+                vm_obj r = tactic_evaluator(m_ctx, m_parent.get_options(), ref)(m_parent.m_dec_tac, s);
                 if (auto new_s = tactic::is_success(r)) {
                     mctx = new_s->mctx();
                     bool postpone_push_delayed = true;
@@ -213,7 +215,7 @@ struct wf_rec_fn {
         }
     };
 
-    void update_eqs(type_context & ctx, name const & fn_name, unpack_eqns & ues, expr const & fn, expr const & new_fn) {
+    void update_eqs(type_context_old & ctx, name const & fn_name, unpack_eqns & ues, expr const & fn, expr const & new_fn) {
         buffer<expr> & eqns = ues.get_eqns_of(0);
         buffer<expr> new_eqns;
         for (expr const & eqn : eqns) {
@@ -227,7 +229,7 @@ struct wf_rec_fn {
             expr type    = ctx.whnf(ctx.infer(new_lhs));
             lean_assert(is_pi(type));
             ue.lhs()     = new_lhs;
-            type_context::tmp_locals locals(ctx);
+            type_context_old::tmp_locals locals(ctx);
             expr F       = locals.push_local_from_binding(type);
             ue.rhs()     = ctx.mk_lambda(F, elim_rec_apps_fn(*this, ctx, fn_name, fn, lhs_args[0], F)(rhs));
             new_eqns.push_back(ue.repack());
@@ -236,7 +238,7 @@ struct wf_rec_fn {
     }
 
     expr elim_recursion(expr const & eqns) {
-        type_context ctx = mk_type_context();
+        type_context_old ctx = mk_type_context();
         unpack_eqns ues(ctx, eqns);
         lean_assert(ues.get_num_fns() == 1);
         expr fn      = ues.get_fn(0);
@@ -253,8 +255,8 @@ struct wf_rec_fn {
     }
 
     expr mk_fix(expr const & aux_fn) {
-        type_context ctx = mk_type_context();
-        type_context::tmp_locals locals(ctx);
+        type_context_old ctx = mk_type_context();
+        type_context_old::tmp_locals locals(ctx);
         buffer<expr> fn_args;
         expr it   = ctx.relaxed_whnf(ctx.infer(aux_fn));
         lean_assert(is_pi(it));
@@ -272,12 +274,13 @@ struct wf_rec_fn {
     }
 
     expr mk_fix_aux_function(equations_header const & header, expr fn) {
-        type_context ctx = mk_type_context();
+        type_context_old ctx = mk_type_context();
         fn = mk_fix(fn);
         expr fn_type = ctx.infer(fn);
         expr r;
-        std::tie(m_env, r) = mk_aux_definition(m_env, m_opts, m_mctx, m_lctx, header,
-                                               head(header.m_fn_names), fn_type, fn);
+        std::tie(m_env, r) = mk_aux_definition(m_env, get_options(), m_mctx, m_lctx, header,
+                                               head(header.m_fn_names), head(header.m_fn_actual_names),
+                                               fn_type, fn);
         return r;
     }
 
@@ -285,7 +288,7 @@ struct wf_rec_fn {
         expr m_fn;
         expr m_F;
 
-        mk_lemma_rhs_fn(type_context & ctx, expr const & fn, expr const & F):
+        mk_lemma_rhs_fn(type_context_old & ctx, expr const & fn, expr const & F):
             replace_visitor_with_tc(ctx), m_fn(fn), m_F(F) {}
 
         virtual expr visit_local(expr const & e) override {
@@ -305,21 +308,21 @@ struct wf_rec_fn {
         }
     };
 
-    expr mk_lemma_rhs(type_context & ctx, expr const & fn, expr rhs) {
+    expr mk_lemma_rhs(type_context_old & ctx, expr const & fn, expr rhs) {
         rhs = ctx.relaxed_whnf(rhs);
         lean_assert(is_lambda(rhs));
-        type_context::tmp_locals locals(ctx);
+        type_context_old::tmp_locals locals(ctx);
         expr F = locals.push_local_from_binding(rhs);
         rhs    = instantiate(binding_body(rhs), F);
         return mk_lemma_rhs_fn(ctx, fn, F)(rhs);
     }
 
-    void mk_lemmas(expr const & fn, list<expr> const & lemmas) {
-        name const & fn_name = const_name(get_app_fn(fn));
+    void mk_lemmas(name const & fn_name, expr const & fn, list<expr> const & lemmas) {
+        name const & fn_prv_name = const_name(get_app_fn(fn));
         unsigned eqn_idx     = 1;
-        type_context ctx     = mk_type_context();
+        type_context_old ctx     = mk_type_context();
         for (expr type : lemmas) {
-            type_context::tmp_locals locals(ctx);
+            type_context_old::tmp_locals locals(ctx);
             type = ctx.relaxed_whnf(type);
             while (is_pi(type)) {
                 expr local = locals.push_local_from_binding(type);
@@ -331,14 +334,14 @@ struct wf_rec_fn {
             expr new_lhs = mk_app(fn, app_arg(lhs));
             expr new_rhs = mk_lemma_rhs(ctx, fn, rhs);
             trace_debug_wf_aux(tout() << "aux equation [" << eqn_idx << "]:\n" << new_lhs << "\n=\n" << new_rhs << "\n";);
-            m_env = mk_equation_lemma(m_env, m_opts, m_mctx, ctx.lctx(), fn_name,
+            m_env = mk_equation_lemma(m_env, get_options(), m_mctx, ctx.lctx(), fn_name, fn_prv_name,
                                       eqn_idx, m_header.m_is_private, locals.as_buffer(), new_lhs, new_rhs);
             eqn_idx++;
         }
         m_mctx = ctx.mctx();
     }
 
-    expr_pair mk_sigma(type_context & ctx, unsigned i, buffer<expr> const & args) {
+    expr_pair mk_sigma(type_context_old & ctx, unsigned i, buffer<expr> const & args) {
         lean_assert(args.size() > 0);
         if (i == args.size() - 1) {
             return mk_pair(args[i], ctx.infer(args[i]));
@@ -409,7 +412,7 @@ struct wf_rec_fn {
         unpack_eqns const &  m_ues;
         buffer<expr> const & m_result_fns;
 
-        unpack_apps_fn(type_context & ctx, name const & packed_name, unsigned packed_num_params,
+        unpack_apps_fn(type_context_old & ctx, name const & packed_name, unsigned packed_num_params,
                        unpack_eqns const & ues, buffer<expr> const & result_fns):
             replace_visitor_with_tc(ctx), m_packed_name(packed_name), m_packed_num_params(packed_num_params),
             m_ues(ues), m_result_fns(result_fns) {
@@ -427,8 +430,9 @@ struct wf_rec_fn {
     eqn_compiler_result unpack(expr const & packed_fn, expr const & eqns_before_pack,
                                list<list<expr>> const & counter_example_args) {
         equations_header const & header = get_equations_header(eqns_before_pack);
-        list<name> fn_names = header.m_fn_names;
-        type_context ctx = mk_type_context();
+        list<name> fn_names     = header.m_fn_names;
+        list<name> fn_actual_names = header.m_fn_actual_names;
+        type_context_old ctx = mk_type_context();
         buffer<expr> result_fns;
         expr packed_fn_type = ctx.relaxed_whnf(ctx.infer(packed_fn));
         expr packed_domain  = binding_domain(packed_fn_type);
@@ -437,7 +441,7 @@ struct wf_rec_fn {
         for (unsigned fidx = 0; fidx < num_fns; fidx++) {
             unsigned arity = ues.get_arity_of(fidx);
             expr fn_type   = ctx.infer(ues.get_fn(fidx));
-            type_context::tmp_locals args(ctx);
+            type_context_old::tmp_locals args(ctx);
             expr it        = fn_type;
             for (unsigned i = 0; i < arity; i++) {
                 it = ctx.relaxed_whnf(it);
@@ -445,14 +449,17 @@ struct wf_rec_fn {
                 expr arg = args.push_local_from_binding(it);
                 it = instantiate(binding_body(it), arg);
             }
-            expr sigma_mk   = mk_sigma(ctx, 0, args.as_buffer()).first;
-            expr packed_arg = mk_mutual_arg(ctx, sigma_mk, fidx, num_fns, packed_domain);
-            expr fn_val     = args.mk_lambda(mk_app(packed_fn, packed_arg));
-            name fn_name    = head(fn_names);
-            fn_names        = tail(fn_names);
+            expr sigma_mk       = mk_sigma(ctx, 0, args.as_buffer()).first;
+            expr packed_arg     = mk_mutual_arg(ctx, sigma_mk, fidx, num_fns, packed_domain);
+            expr fn_val         = args.mk_lambda(mk_app(packed_fn, packed_arg));
+            name fn_name        = head(fn_names);
+            name fn_actual_name = head(fn_actual_names);
+            fn_names            = tail(fn_names);
+            fn_actual_names     = tail(fn_actual_names);
             trace_debug_wf(tout() << fn_name << " := " << fn_val << "\n";);
             expr r;
-            std::tie(m_env, r) = mk_aux_definition(m_env, m_opts, m_mctx, m_lctx, header, fn_name, fn_type, fn_val);
+            std::tie(m_env, r) = mk_aux_definition(m_env, get_options(), m_mctx, m_lctx, header, fn_name, fn_actual_name,
+                                                   fn_type, fn_val);
             result_fns.push_back(r);
         }
         ctx.set_env(m_env);
@@ -470,7 +477,7 @@ struct wf_rec_fn {
                 if (!packed_eqn_decl) break;
                 list<level> packed_eqn_levels = param_names_to_levels(packed_eqn_decl->get_univ_params());
                 expr packed_eqn_type = instantiate_type_univ_params(*packed_eqn_decl, packed_eqn_levels);
-                type_context::tmp_locals args(ctx);
+                type_context_old::tmp_locals args(ctx);
                 expr packed_eqn = packed_eqn_type;
                 while (true) {
                     packed_eqn = ctx.relaxed_whnf(packed_eqn);
@@ -530,9 +537,10 @@ struct wf_rec_fn {
         if (header.m_num_fns > 1) {
             eqns = pack_mutual(eqns);
         } else {
-            equations_header new_header = header;
-            new_header.m_fn_names       = to_list(name(head(header.m_fn_names), "_pack"));
-            eqns                        = update_equations(eqns, new_header);
+            equations_header new_header   = header;
+            new_header.m_fn_names         = to_list(name(head(header.m_fn_names), "_pack"));
+            new_header.m_fn_actual_names  = to_list(name(head(header.m_fn_actual_names), "_pack"));
+            eqns                          = update_equations(eqns, new_header);
         }
 
         /* Retrieve well founded relation */
@@ -550,13 +558,15 @@ struct wf_rec_fn {
         trace_debug_wf(tout() << "after elim_recursion\n" << eqns << "\n";);
 
         /* Eliminate pattern matching */
-        elim_match_result r = elim_match(m_env, m_opts, m_mctx, m_lctx, eqns, m_elab);
+        elim_match_result r = elim_match(m_env, m_elab, m_mctx, m_lctx, eqns);
         expr fn = mk_fix_aux_function(get_equations_header(eqns), r.m_fn);
 
         trace_debug_wf(tout() << "after mk_fix\n" << fn << " :\n  " << mk_type_context().infer(fn) << "\n";);
         if (m_header.m_aux_lemmas) {
             lean_assert(!m_header.m_is_meta);
-            mk_lemmas(fn, r.m_lemmas);
+            equations_header const & header = get_equations_header(eqns);
+            name const & fn_name = head(header.m_fn_names);
+            mk_lemmas(fn_name, fn, r.m_lemmas);
         }
 
         return unpack(fn, before_pack, r.m_counter_examples);
@@ -565,14 +575,32 @@ struct wf_rec_fn {
 
 /** \brief (Try to) eliminate "recursive calls" in the equations \c eqns by using well founded recursion.
     If successful, elim_match is used to compile pattern matching. */
-eqn_compiler_result wf_rec(environment & env, options const & opts,
-            metavar_context & mctx, local_context const & lctx,
-            expr const & eqns, elaborator & elab) {
-    wf_rec_fn proc(env, opts, mctx, lctx, elab);
+eqn_compiler_result wf_rec(environment & env, elaborator & elab,
+                           metavar_context & mctx, local_context const & lctx,
+                           expr const & eqns) {
+    wf_rec_fn proc(env, elab, mctx, lctx);
     auto r = proc(eqns);
     env    = proc.m_env;
     mctx   = proc.m_mctx;
     return r;
+}
+
+bool uses_well_founded_recursion(environment const & env, name const & n) {
+    if (!n.is_atomic() && n.is_string() &&
+        (strcmp(n.get_string(), "_mutual") == 0 || strcmp(n.get_string(), "_pack") == 0)) {
+        return true;
+    }
+    declaration d = env.get(n);
+    expr val = d.get_value();
+    while (is_lambda(val))
+        val = binding_body(val);
+    expr const & fn = get_app_fn(val);
+    if (!is_constant(fn))
+        return false;
+    name const & fn_name = const_name(fn);
+    if (!fn_name.is_string() || fn_name.get_string()[0] != '_')
+        return false;
+    return uses_well_founded_recursion(env, fn_name);
 }
 
 void initialize_wf_rec() {

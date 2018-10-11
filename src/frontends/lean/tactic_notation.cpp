@@ -26,6 +26,7 @@ Author: Leonardo de Moura
 #include "frontends/lean/prenum.h"
 #include "frontends/lean/tactic_notation.h"
 #include "frontends/lean/elaborator.h"
+#include "frontends/lean/decl_util.h"
 #include "frontends/lean/pp.h"
 #include "frontends/lean/builtin_exprs.h"
 
@@ -225,7 +226,7 @@ struct parse_tactic_fn {
     }
 
     expr andthen(expr const & tac1, expr const & tac2, pos_info const & pos) {
-        expr r = m_p.save_pos(mk_app(mk_constant(get_andthen_name()), tac1, tac2), pos);
+        expr r = m_p.save_pos(mk_app(mk_constant(get_has_andthen_andthen_name()), tac1, tac2), pos);
         if (m_use_istep)
             r = mk_tactic_istep(m_p, r, pos, pos, m_tac_class);
         return r;
@@ -237,7 +238,8 @@ struct parse_tactic_fn {
 
     expr parse_qexpr(unsigned rbp = 0) {
         auto p = m_p.pos();
-        parser::quote_scope scope(m_p, true);
+        parser::quote_scope scope1(m_p, true);
+        restore_decl_meta_scope scope2;
         expr e = m_p.parse_expr(rbp);
         return m_p.save_pos(mk_pexpr_quote_and_substs(e, /* is_strict */ false), p);
     }
@@ -324,7 +326,7 @@ struct parse_tactic_fn {
                 // `by tac` ~> `solve1 { tac }`
                 m_p.next();
                 auto pos = m_p.pos();
-                expr tac = parse_elem_core(save_info);
+                expr tac = operator()(save_info);
                 auto end_pos = m_p.pos_of(tac);
                 tac = mk_tactic_solve1(m_p, tac, pos, end_pos, m_tac_class, m_use_istep && save_info);
                 if (save_info) {
@@ -363,8 +365,8 @@ struct parse_tactic_fn {
         return r;
     }
 
-    expr operator()() {
-        expr r = parse_elem(true);
+    expr operator()(bool save_info = true) {
+        expr r = parse_elem(save_info);
         if (m_p.curr_is_token(get_semicolon_tk()))
             return parse_andthen(r);
         else if (m_p.curr_is_token(get_orelse_tk()))
@@ -522,7 +524,8 @@ static expr parse_begin_end_block(parser & p, pos_info const & start_pos, name c
 }
 
 expr parse_begin_end_expr_core(parser & p, pos_info const & pos, name const & end_token) {
-    parser::local_scope _(p);
+    parser::local_scope scope1(p);
+    meta_definition_scope scope2;
     p.clear_expr_locals();
     bool use_istep = true;
     expr tac = parse_begin_end_block(p, pos, end_token, get_tactic_name(), use_istep);
@@ -543,7 +546,8 @@ expr parse_begin_end(parser & p, unsigned, expr const *, pos_info const & pos) {
 
 expr parse_by(parser & p, unsigned, expr const *, pos_info const & pos) {
     p.next();
-    parser::local_scope _(p);
+    parser::local_scope scope1(p);
+    meta_definition_scope scope2;
     p.clear_expr_locals();
     auto tac_pos = p.pos();
     try {

@@ -9,6 +9,38 @@ Author: Leonardo de Moura
 #include "library/type_context.h"
 
 namespace lean {
+/*
+   Given a type `α`, this structure stores instances and partial
+   applications for arithmetic-related instances.  The data is
+   constructed "on demand" by the helper class `arith_instance`.
+
+   The current design allows multiple `arith_instance` to share
+   the same `arith_instance_info` IF they are all in the same
+   execution thread.
+
+   This code is currently used by
+   - norm_num (numeric normalizer)
+     Remark: the proofs created by `norm_num` try to use the most general
+     structure for applying each auxiliary lemma. In retrospect, I think this is overkill.
+     In practice, `norm_num` is used only for: `semiring`, `linear_ordered_semiring`, `ring`, `linear_ordered_ring`,
+     `field`, `linerar_ordered_field`. Moreover, we want to use the unbundled approach for structures
+     such as `monoid` and `group`.
+
+   - It was also used by mpq_macro (which is used only by the SMT2 frontend)
+     Remark: the SMT2 frontend was originally built to test the performance of
+     a blast tactic that Leo and Daniel were developing. This tactic does not
+     exist anymore. Moreover, SMT2 benchmarks are far from ideal for testing
+     a system like Lean. AFAICT, nobody uses the SMT2 frontend.
+     So, we have deleted `mpq_macro` and the SMT2 frontend. Motivation: less stuff to maintain.
+
+   Plan:
+
+   - Reduce the number of structures used by `norm_num`. We just need to change
+     the lemmas used by `norm_num` and adjust the C++ code. An additional motivation
+     is that we can replace semi-bundled type classes such as `monoid` and `group` with
+     unbundled type classes such as `is_monoid` and `is_group` that are parametrized
+     by operations too.
+*/
 class arith_instance_info {
     friend class arith_instance;
     expr   m_type;
@@ -38,7 +70,7 @@ typedef std::shared_ptr<arith_instance_info> arith_instance_info_ptr;
 arith_instance_info_ptr mk_arith_instance_info(expr const & type, level const & lvl);
 
 class arith_instance {
-    type_context *          m_ctx;
+    type_context_old *          m_ctx;
     arith_instance_info_ptr m_info;
 
     expr mk_structure(name const & s, optional<expr> & r);
@@ -47,13 +79,17 @@ class arith_instance {
     expr mk_pos_num(mpz const & n);
 
 public:
-    arith_instance(type_context & ctx, arith_instance_info_ptr const & info):m_ctx(&ctx), m_info(info) {}
-    arith_instance(type_context & ctx, expr const & type, level const & level);
-    arith_instance(type_context & ctx, expr const & type);
+    arith_instance(type_context_old & ctx, arith_instance_info_ptr const & info):m_ctx(&ctx), m_info(info) {}
+    arith_instance(type_context_old & ctx, expr const & type, level const & level);
+    arith_instance(type_context_old & ctx, expr const & type);
     arith_instance(arith_instance_info_ptr const & info):m_ctx(nullptr), m_info(info) {}
-    arith_instance(type_context & ctx):m_ctx(&ctx) {}
+    arith_instance(type_context_old & ctx):m_ctx(&ctx) {}
 
     void set_info(arith_instance_info_ptr const & info) { m_info = info; }
+    /* The following method creates a fresh `arith_instance_info` for the given type.
+
+       Missing optimization: it should do nothing if `type` is and `m_info->m_type`
+       are equal. */
     void set_type(expr const & type);
 
     expr const & get_type() const { return m_info->m_type; }

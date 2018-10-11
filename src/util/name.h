@@ -18,19 +18,24 @@ Author: Leonardo de Moura
 
 namespace lean {
 constexpr char const * lean_name_separator = ".";
+#ifdef _MSC_VER
+constexpr char16_t id_begin_escape = L'\xab';
+constexpr char16_t id_end_escape = L'\xbb';
+#else
 constexpr char16_t id_begin_escape = u'«';
 constexpr char16_t id_end_escape = u'»';
+#endif
 
-bool is_id_first(char const * begin, char const * end);
-inline bool is_id_first(unsigned char const * begin, unsigned char const * end) {
-    return is_id_first(reinterpret_cast<char const *>(begin),
-                      reinterpret_cast<char const *>(end));
+bool is_id_first(unsigned char const * begin, unsigned char const * end);
+inline bool is_id_first(char const * begin, char const * end) {
+    return is_id_first(reinterpret_cast<unsigned char const *>(begin),
+                      reinterpret_cast<unsigned char const *>(end));
 }
 
-bool is_id_rest(char const * begin, char const * end);
-inline bool is_id_rest(unsigned char const * begin, unsigned char const * end) {
-    return is_id_rest(reinterpret_cast<char const *>(begin),
-                      reinterpret_cast<char const *>(end));
+bool is_id_rest(unsigned char const * begin, unsigned char const * end);
+inline bool is_id_rest(char const * begin, char const * end) {
+    return is_id_rest(reinterpret_cast<unsigned char const *>(begin),
+                      reinterpret_cast<unsigned char const *>(end));
 }
 
 enum class name_kind { ANONYMOUS, STRING, NUMERAL };
@@ -252,6 +257,9 @@ typedef std::function<bool(name const &)> name_predicate; // NOLINT
 serializer & operator<<(serializer & s, name const & n);
 name read_name(deserializer & d);
 inline deserializer & operator>>(deserializer & d, name & n) { n = read_name(d); return d; }
+
+/** \brief Return true if it is a lean internal name, i.e., the name starts with a `_` */
+bool is_internal_name(name const & n);
 
 void initialize_name();
 void finalize_name();

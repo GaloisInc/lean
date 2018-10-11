@@ -16,19 +16,19 @@ vm_obj change_core(expr const & e, bool check, tactic_state const & s) {
         optional<metavar_decl> g = s.get_main_goal_decl();
         if (!g) return mk_no_goals_exception(s);
         if (e == g->get_type()) return tactic::mk_success(s);
-        type_context ctx         = mk_type_context_for(s);
+        type_context_old ctx         = mk_type_context_for(s);
         if (!check || ctx.is_def_eq(e, g->get_type())) {
-            auto mctx    = ctx.mctx();
-            expr new_e   = mctx.instantiate_mvars(e);
-            expr new_M   = mctx.mk_metavar_decl(g->get_context(), new_e);
+            expr new_e   = ctx.instantiate_mvars(e);
+            expr new_M   = ctx.mk_metavar_decl(g->get_context(), new_e);
             /*
                We use the proof term
 
-                  (@id_locked (g->get_type()) new_M)
+                  (@id (g->get_type()) new_M)
 
                to create a "checkpoint". See discussion at issue #1260
             */
-            expr  pr  = mk_id_locked(ctx, g->get_type(), new_M);
+            expr  pr  = mk_id(ctx, g->get_type(), new_M);
+            auto mctx    = ctx.mctx();
             mctx.assign(head(s.goals()), pr);
             list<expr> new_gs(new_M, tail(s.goals()));
             return tactic::mk_success(set_mctx_goals(s, mctx, new_gs));

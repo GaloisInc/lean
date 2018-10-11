@@ -16,13 +16,13 @@ meta def skip : smt_tactic unit :=
 return ()
 
 meta def solve_goals : smt_tactic unit :=
-repeat close
+iterate close
 
 meta def step {α : Type} (tac : smt_tactic α) : smt_tactic unit :=
 tac >> solve_goals
 
 meta def istep {α : Type} (line0 col0 line col : nat) (tac : smt_tactic α) : smt_tactic unit :=
-λ ss ts, (@scope_trace _ line col (λ _, (tac >> solve_goals) ss ts)).clamp_pos line0 line col
+⟨λ ss ts, (@scope_trace _ line col (λ _, (tac >> solve_goals).run ss ts)).clamp_pos line0 line col⟩
 
 meta def execute (tac : smt_tactic unit) : tactic unit :=
 using_smt tac
@@ -222,23 +222,23 @@ meta def try (t : itactic) : smt_tactic unit :=
 smt_tactic.try t
 
 /-- Keep applying the given tactic until it fails. -/
-meta def repeat (t : itactic) : smt_tactic unit :=
-smt_tactic.repeat t
+meta def iterate (t : itactic) : smt_tactic unit :=
+smt_tactic.iterate t
 
 /-- Apply the given tactic to all remaining goals. -/
 meta def all_goals (t : itactic) : smt_tactic unit :=
 smt_tactic.all_goals t
 
-meta def induction (p : parse texpr) (rec_name : parse using_ident) (ids : parse with_ident_list)
+meta def induction (p : parse tactic.interactive.cases_arg_p) (rec_name : parse using_ident) (ids : parse with_ident_list)
   (revert : parse $ (tk "generalizing" *> ident*)?) : smt_tactic unit :=
 slift (tactic.interactive.induction p rec_name ids revert)
 
 open tactic
 
 /-- Simplify the target type of the main goal. -/
-meta def simp (no_dflt : parse only_flag) (hs : parse simp_arg_list) (attr_names : parse with_ident_list)
-              (cfg : simp_config_ext := {}) : smt_tactic unit :=
-tactic.interactive.simp no_dflt hs attr_names (loc.ns [none]) cfg
+meta def simp (use_iota_eqn : parse $ (tk "!")?) (no_dflt : parse only_flag) (hs : parse simp_arg_list)
+              (attr_names : parse with_ident_list) (cfg : simp_config_ext := {}) : smt_tactic unit :=
+tactic.interactive.simp use_iota_eqn no_dflt hs attr_names (loc.ns [none]) cfg
 
 meta def dsimp (no_dflt : parse only_flag) (es : parse simp_arg_list) (attr_names : parse with_ident_list) : smt_tactic unit :=
 tactic.interactive.dsimp no_dflt es attr_names (loc.ns [none])
@@ -256,7 +256,7 @@ smt_tactic.eblast
 /-- Keep applying heuristic instantiation using the given lemmas until the current goal is solved, or it fails. -/
 meta def eblast_using (l : parse pexpr_list_or_texpr) : smt_tactic unit :=
 do hs ← add_hinst_lemmas_from_pexprs reducible ff l hinst_lemmas.mk,
-   smt_tactic.repeat (smt_tactic.ematch_using hs >> smt_tactic.try smt_tactic.close)
+   smt_tactic.iterate (smt_tactic.ematch_using hs >> smt_tactic.try smt_tactic.close)
 
 meta def guard_expr_eq (t : expr) (p : parse $ tk ":=" *> texpr) : smt_tactic unit :=
 do e ← to_expr p, guard (expr.alpha_eqv t e)

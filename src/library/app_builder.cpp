@@ -8,6 +8,7 @@ Author: Leonardo de Moura
 #include "util/name_map.h"
 #include "kernel/instantiate.h"
 #include "kernel/abstract.h"
+#include "library/idx_metavar.h"
 #include "library/util.h"
 #include "library/trace.h"
 #include "library/constants.h"
@@ -103,18 +104,10 @@ class app_builder_cache {
 
     environment          m_env;
     map                  m_map;
-    relation_info_getter m_rel_getter;
-    refl_info_getter     m_refl_getter;
-    symm_info_getter     m_symm_getter;
-    trans_info_getter    m_trans_getter;
     friend class app_builder;
 public:
     app_builder_cache(environment const & env):
-        m_env(env),
-        m_rel_getter(mk_relation_info_getter(env)),
-        m_refl_getter(mk_refl_info_getter(env)),
-        m_symm_getter(mk_symm_info_getter(env)),
-        m_trans_getter(mk_trans_info_getter(env)) {
+        m_env(env) {
     }
 
     environment const & env() const { return m_env; }
@@ -122,22 +115,22 @@ public:
 
 typedef cache_compatibility_helper<app_builder_cache> app_builder_cache_helper;
 
+/* CACHE_RESET: YES */
 MK_THREAD_LOCAL_GET_DEF(app_builder_cache_helper, get_abch);
 
 /** Return an app_builder_cache for the transparency_mode in ctx, and compatible with the environment. */
-app_builder_cache & get_app_builder_cache_for(type_context const & ctx) {
+app_builder_cache & get_app_builder_cache_for(type_context_old const & ctx) {
     return get_abch().get_cache_for(ctx);
 }
 
-level get_level(type_context & ctx, expr const & A) {
-    expr Type = ctx.relaxed_whnf(ctx.infer(A));
-    if (!is_sort(Type)) {
+static level get_level_ap(type_context_old & ctx, expr const & A) {
+    try {
+        return get_level(ctx, A);
+    } catch (exception &) {
         lean_app_builder_trace_core(ctx, tout() << "failed to infer universe level for type " << A << "\n";);
         throw app_builder_exception();
     }
-    return sort_level(Type);
 }
-
 
 /** \brief Helper for creating simple applications where some arguments are inferred using
     type inference.
@@ -154,10 +147,12 @@ level get_level(type_context & ctx, expr const & A) {
         rel.{1 2} nat (fun n : nat, vec real n) f g
 */
 class app_builder {
-    type_context &      m_ctx;
+    type_context_old &      m_ctx;
     app_builder_cache & m_cache;
     typedef app_builder_cache::key   key;
     typedef app_builder_cache::entry entry;
+
+    environment const & env() const { return m_ctx.env(); }
 
     levels mk_metavars(declaration const & d, buffer<expr> & mvars, buffer<optional<expr>> & inst_args) {
         unsigned num_univ = d.get_num_univ_params();
@@ -184,7 +179,7 @@ class app_builder {
         lean_assert(k.check_invariant());
         auto it = m_cache.m_map.find(k);
         if (it == m_cache.m_map.end()) {
-            if (auto d = m_ctx.env().find(c)) {
+            if (auto d = env().find(c)) {
                 buffer<expr> mvars;
                 buffer<optional<expr>> inst_args;
                 levels lvls = mk_metavars(*d, mvars, inst_args);
@@ -236,7 +231,7 @@ class app_builder {
         lean_assert(k.check_invariant());
         auto it = m_cache.m_map.find(k);
         if (it == m_cache.m_map.end()) {
-            if (auto d = m_ctx.env().find(c)) {
+            if (auto d = env().find(c)) {
                 buffer<expr> mvars;
                 buffer<optional<expr>> inst_args;
                 levels lvls = mk_metavars(*d, mask_sz, mvars, inst_args);
@@ -312,14 +307,15 @@ class app_builder {
     }
 
 public:
-    app_builder(type_context & ctx):m_ctx(ctx), m_cache(get_app_builder_cache_for(ctx)) {}
+    app_builder(type_context_old & ctx):m_ctx(ctx), m_cache(get_app_builder_cache_for(ctx)) {}
 
     level get_level(expr const & A) {
-        return ::lean::get_level(m_ctx, A);
+        return get_level_ap(m_ctx, A);
     }
 
     expr mk_app(name const & c, unsigned nargs, expr const * args) {
-        type_context::tmp_mode_scope scope(m_ctx);
+        lean_assert(std::all_of(args, args + nargs, [](expr const & arg) { return !has_idx_metavar(arg); }))
+        type_context_old::tmp_mode_scope scope(m_ctx);
         optional<entry> e = get_entry(c, nargs);
         if (!e) {
             trace_failure(c, "failed to retrieve declaration");
@@ -362,7 +358,7 @@ public:
     }
 
     expr mk_app(name const & c, unsigned mask_sz, bool const * mask, expr const * args) {
-        type_context::tmp_mode_scope scope(m_ctx);
+        type_context_old::tmp_mode_scope scope(m_ctx);
         unsigned nargs = get_nargs(mask_sz, mask);
         optional<entry> e = get_entry(c, mask_sz, mask);
         if (!e) {
@@ -425,7 +421,7 @@ public:
             return mk_eq(lhs, rhs);
         } else if (n == get_iff_name()) {
             return mk_iff(lhs, rhs);
-        } else if (auto info = m_cache.m_rel_getter(n)) {
+        } else if (auto info = get_relation_info(env(), n)) {
             buffer<bool> mask;
             for (unsigned i = 0; i < info->get_arity(); i++) {
                 mask.push_back(i == info->get_lhs_pos() || i == info->get_rhs_pos());
@@ -464,7 +460,7 @@ public:
             return mk_iff_refl(a);
         } else if (relname == get_heq_name()) {
             return mk_heq_refl(a);
-        } else if (auto info = m_cache.m_refl_getter(relname)) {
+        } else if (auto info = get_refl_extra_info(env(), relname)) {
             return mk_app(info->m_name, 1, &a);
         } else {
             lean_app_builder_trace(
@@ -495,7 +491,7 @@ public:
             return mk_iff_symm(H);
         } else if (relname == get_heq_name()) {
             return mk_heq_symm(H);
-        } else if (auto info = m_cache.m_symm_getter(relname)) {
+        } else if (auto info = get_symm_extra_info(env(), relname)) {
             return mk_app(info->m_name, 1, &H);
         } else {
             lean_app_builder_trace(
@@ -549,7 +545,7 @@ public:
             return mk_iff_trans(H1, H2);
         } else if (relname == get_heq_name()) {
             return mk_heq_trans(H1, H2);
-        } else if (auto info = m_cache.m_trans_getter(relname, relname)) {
+        } else if (auto info = get_trans_extra_info(env(), relname, relname)) {
             expr args[2] = {H1, H2};
             return mk_app(info->m_name, 2, args);
         } else {
@@ -687,7 +683,7 @@ public:
             lean_app_builder_trace(tout() << "failed to build lift_of_eq equality proof expected:\n" << H << "\n";);
             throw app_builder_exception();
         }
-        type_context::tmp_locals locals(m_ctx);
+        type_context_old::tmp_locals locals(m_ctx);
         expr x         = locals.push_local(name("A"), A);
         // motive := fun x : A, a ~ x
         expr motive    = locals.mk_lambda(mk_rel(R, a, x));
@@ -827,117 +823,117 @@ public:
     }
 };
 
-expr mk_app(type_context & ctx, name const & c, unsigned nargs, expr const * args, optional<transparency_mode> const & md) {
+expr mk_app(type_context_old & ctx, name const & c, unsigned nargs, expr const * args, optional<transparency_mode> const & md) {
     if (md) {
-        type_context::transparency_scope _s1(ctx, *md);
-        type_context::zeta_scope         _s2(ctx, true);
+        type_context_old::transparency_scope _s1(ctx, *md);
+        type_context_old::zeta_scope         _s2(ctx, true);
         return app_builder(ctx).mk_app(c, nargs, args);
     } else if (!is_at_least_semireducible(ctx.mode())) {
-        type_context::transparency_scope _s1(ctx, transparency_mode::Semireducible);
-        type_context::zeta_scope _s2(ctx, true);
+        type_context_old::transparency_scope _s1(ctx, transparency_mode::Semireducible);
+        type_context_old::zeta_scope _s2(ctx, true);
         return app_builder(ctx).mk_app(c, nargs, args);
     } else {
         return app_builder(ctx).mk_app(c, nargs, args);
     }
 }
 
-expr mk_app(type_context & ctx, name const & c, unsigned mask_sz, bool const * mask, expr const * args) {
+expr mk_app(type_context_old & ctx, name const & c, unsigned mask_sz, bool const * mask, expr const * args) {
     return app_builder(ctx).mk_app(c, mask_sz, mask, args);
 }
 
-expr mk_app(type_context & ctx, name const & c, unsigned total_nargs, unsigned expl_nargs, expr const * expl_args) {
+expr mk_app(type_context_old & ctx, name const & c, unsigned total_nargs, unsigned expl_nargs, expr const * expl_args) {
     return app_builder(ctx).mk_app(c, total_nargs, expl_nargs, expl_args);
 }
 
-expr mk_rel(type_context & ctx, name const & n, expr const & lhs, expr const & rhs) {
+expr mk_rel(type_context_old & ctx, name const & n, expr const & lhs, expr const & rhs) {
     return app_builder(ctx).mk_rel(n, lhs, rhs);
 }
 
-expr mk_eq(type_context & ctx, expr const & lhs, expr const & rhs) {
+expr mk_eq(type_context_old & ctx, expr const & lhs, expr const & rhs) {
     return app_builder(ctx).mk_eq(lhs, rhs);
 }
 
-expr mk_iff(type_context & ctx, expr const & lhs, expr const & rhs) {
+expr mk_iff(type_context_old & ctx, expr const & lhs, expr const & rhs) {
     return app_builder(ctx).mk_iff(lhs, rhs);
 }
 
-expr mk_heq(type_context & ctx, expr const & lhs, expr const & rhs) {
+expr mk_heq(type_context_old & ctx, expr const & lhs, expr const & rhs) {
     return app_builder(ctx).mk_heq(lhs, rhs);
 }
 
-expr mk_refl(type_context & ctx, name const & relname, expr const & a) {
+expr mk_refl(type_context_old & ctx, name const & relname, expr const & a) {
     return app_builder(ctx).mk_refl(relname, a);
 }
 
-expr mk_eq_refl(type_context & ctx, expr const & a) {
+expr mk_eq_refl(type_context_old & ctx, expr const & a) {
     return app_builder(ctx).mk_eq_refl(a);
 }
 
-expr mk_iff_refl(type_context & ctx, expr const & a) {
+expr mk_iff_refl(type_context_old & ctx, expr const & a) {
     return app_builder(ctx).mk_iff_refl(a);
 }
 
-expr mk_heq_refl(type_context & ctx, expr const & a) {
+expr mk_heq_refl(type_context_old & ctx, expr const & a) {
     return app_builder(ctx).mk_heq_refl(a);
 }
 
-expr mk_symm(type_context & ctx, name const & relname, expr const & H) {
+expr mk_symm(type_context_old & ctx, name const & relname, expr const & H) {
     return app_builder(ctx).mk_symm(relname, H);
 }
 
-expr mk_eq_symm(type_context & ctx, expr const & H) {
+expr mk_eq_symm(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_eq_symm(H);
 }
 
-expr mk_eq_symm(type_context & ctx, expr const & a, expr const & b, expr const & H) {
+expr mk_eq_symm(type_context_old & ctx, expr const & a, expr const & b, expr const & H) {
     return app_builder(ctx).mk_eq_symm(a, b, H);
 }
 
-expr mk_iff_symm(type_context & ctx, expr const & H) {
+expr mk_iff_symm(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_iff_symm(H);
 }
 
-expr mk_heq_symm(type_context & ctx, expr const & H) {
+expr mk_heq_symm(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_heq_symm(H);
 }
 
-expr mk_trans(type_context & ctx, name const & relname, expr const & H1, expr const & H2) {
+expr mk_trans(type_context_old & ctx, name const & relname, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_trans(relname, H1, H2);
 }
 
-expr mk_eq_trans(type_context & ctx, expr const & H1, expr const & H2) {
+expr mk_eq_trans(type_context_old & ctx, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_eq_trans(H1, H2);
 }
 
-expr mk_eq_trans(type_context & ctx, expr const & a, expr const & b, expr const & c, expr const & H1, expr const & H2) {
+expr mk_eq_trans(type_context_old & ctx, expr const & a, expr const & b, expr const & c, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_eq_trans(a, b, c, H1, H2);
 }
 
-expr mk_iff_trans(type_context & ctx, expr const & H1, expr const & H2) {
+expr mk_iff_trans(type_context_old & ctx, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_iff_trans(H1, H2);
 }
 
-expr mk_heq_trans(type_context & ctx, expr const & H1, expr const & H2) {
+expr mk_heq_trans(type_context_old & ctx, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_heq_trans(H1, H2);
 }
 
-expr mk_eq_rec(type_context & ctx, expr const & C, expr const & H1, expr const & H2) {
+expr mk_eq_rec(type_context_old & ctx, expr const & C, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_eq_rec(C, H1, H2);
 }
 
-expr mk_eq_drec(type_context & ctx, expr const & C, expr const & H1, expr const & H2) {
+expr mk_eq_drec(type_context_old & ctx, expr const & C, expr const & H1, expr const & H2) {
     return app_builder(ctx).mk_eq_drec(C, H1, H2);
 }
 
-expr mk_eq_of_heq(type_context & ctx, expr const & H) {
+expr mk_eq_of_heq(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_eq_of_heq(H);
 }
 
-expr mk_heq_of_eq(type_context & ctx, expr const & H) {
+expr mk_heq_of_eq(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_heq_of_eq(H);
 }
 
-expr mk_congr_arg(type_context & ctx, expr const & f, expr const & H, bool skip_arrow_test) {
+expr mk_congr_arg(type_context_old & ctx, expr const & f, expr const & H, bool skip_arrow_test) {
     expr eq = ctx.relaxed_whnf(ctx.infer(H));
     expr pi = ctx.relaxed_whnf(ctx.infer(f));
     expr A, B, lhs, rhs;
@@ -955,12 +951,12 @@ expr mk_congr_arg(type_context & ctx, expr const & f, expr const & H, bool skip_
     } else {
         B = binding_body(pi);
     }
-    level lvl_1  = get_level(ctx, A);
-    level lvl_2  = get_level(ctx, B);
+    level lvl_1  = get_level_ap(ctx, A);
+    level lvl_2  = get_level_ap(ctx, B);
     return mk_app({mk_constant(get_congr_arg_name(), {lvl_1, lvl_2}), A, B, lhs, rhs, f, H});
 }
 
-expr mk_congr_fun(type_context & ctx, expr const & H, expr const & a) {
+expr mk_congr_fun(type_context_old & ctx, expr const & H, expr const & a) {
     expr eq = ctx.relaxed_whnf(ctx.infer(H));
     expr pi, lhs, rhs;
     if (!is_eq(eq, pi, lhs, rhs)) {
@@ -974,12 +970,12 @@ expr mk_congr_fun(type_context & ctx, expr const & H, expr const & a) {
     }
     expr A       = binding_domain(pi);
     expr B       = mk_lambda(binding_name(pi), binding_domain(pi), binding_body(pi), binding_info(pi));
-    level lvl_1  = get_level(ctx, A);
-    level lvl_2  = get_level(ctx, mk_app(B, a));
+    level lvl_1  = get_level_ap(ctx, A);
+    level lvl_2  = get_level_ap(ctx, mk_app(B, a));
     return mk_app({mk_constant(get_congr_fun_name(), {lvl_1, lvl_2}), A, B, lhs, rhs, H, a});
 }
 
-expr mk_congr(type_context & ctx, expr const & H1, expr const & H2, bool skip_arrow_test) {
+expr mk_congr(type_context_old & ctx, expr const & H1, expr const & H2, bool skip_arrow_test) {
     expr eq1 = ctx.relaxed_whnf(ctx.infer(H1));
     expr eq2 = ctx.relaxed_whnf(ctx.infer(H2));
     expr pi, lhs1, rhs1;
@@ -999,58 +995,58 @@ expr mk_congr(type_context & ctx, expr const & H1, expr const & H2, bool skip_ar
             lean_app_builder_trace_core(ctx, tout() << "failed to build congr, non-dependent function expected:\n" << pi << "\n";);
             throw app_builder_exception();
         } else {
-            B = instantiate(binding_body(pi), lhs1);
+            B = instantiate(binding_body(pi), lhs2);
         }
     } else {
         B = binding_body(pi);
     }
     A            = binding_domain(pi);
-    level lvl_1  = get_level(ctx, A);
-    level lvl_2  = get_level(ctx, B);
+    level lvl_1  = get_level_ap(ctx, A);
+    level lvl_2  = get_level_ap(ctx, B);
     return mk_app({mk_constant(get_congr_name(), {lvl_1, lvl_2}), A, B, lhs1, rhs1, lhs2, rhs2, H1, H2});
 }
 
-expr mk_funext(type_context & ctx, expr const & lam_pf) {
+expr mk_funext(type_context_old & ctx, expr const & lam_pf) {
     // TODO(dhs): efficient version
     return mk_app(ctx, get_funext_name(), lam_pf);
 }
 
-expr lift_from_eq(type_context & ctx, name const & R, expr const & H) {
+expr lift_from_eq(type_context_old & ctx, name const & R, expr const & H) {
     return app_builder(ctx).lift_from_eq(R, H);
 }
 
-expr mk_iff_false_intro(type_context & ctx, expr const & H) {
+expr mk_iff_false_intro(type_context_old & ctx, expr const & H) {
     // TODO(Leo): implement custom version if bottleneck.
     return mk_app(ctx, get_iff_false_intro_name(), {H});
 }
 
-expr mk_iff_true_intro(type_context & ctx, expr const & H) {
+expr mk_iff_true_intro(type_context_old & ctx, expr const & H) {
     // TODO(Leo): implement custom version if bottleneck.
     return mk_app(ctx, get_iff_true_intro_name(), {H});
 }
 
-expr mk_eq_false_intro(type_context & ctx, expr const & H) {
+expr mk_eq_false_intro(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_eq_false_intro(H);
 }
 
-expr mk_eq_true_intro(type_context & ctx, expr const & H) {
+expr mk_eq_true_intro(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_eq_true_intro(H);
 }
 
-expr mk_not_of_eq_false(type_context & ctx, expr const & H) {
+expr mk_not_of_eq_false(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_not_of_eq_false(H);
 }
 
-expr mk_of_eq_true(type_context & ctx, expr const & H) {
+expr mk_of_eq_true(type_context_old & ctx, expr const & H) {
     return app_builder(ctx).mk_of_eq_true(H);
 }
 
-expr mk_neq_of_not_iff(type_context & ctx, expr const & H) {
+expr mk_neq_of_not_iff(type_context_old & ctx, expr const & H) {
     // TODO(Leo): implement custom version if bottleneck.
     return mk_app(ctx, get_neq_of_not_iff_name(), {H});
 }
 
-expr mk_not_of_iff_false(type_context & ctx, expr const & H) {
+expr mk_not_of_iff_false(type_context_old & ctx, expr const & H) {
     if (is_constant(get_app_fn(H), get_iff_false_intro_name())) {
         // not_of_iff_false (iff_false_intro H) == H
         return app_arg(H);
@@ -1059,7 +1055,7 @@ expr mk_not_of_iff_false(type_context & ctx, expr const & H) {
     return mk_app(ctx, get_not_of_iff_false_name(), 2, {H});
 }
 
-expr mk_of_iff_true(type_context & ctx, expr const & H) {
+expr mk_of_iff_true(type_context_old & ctx, expr const & H) {
     if (is_constant(get_app_fn(H), get_iff_true_intro_name())) {
         // of_iff_true (iff_true_intro H) == H
         return app_arg(H);
@@ -1068,72 +1064,82 @@ expr mk_of_iff_true(type_context & ctx, expr const & H) {
     return mk_app(ctx, get_of_iff_true_name(), {H});
 }
 
-expr mk_false_of_true_iff_false(type_context & ctx, expr const & H) {
+expr mk_false_of_true_iff_false(type_context_old & ctx, expr const & H) {
     // TODO(Leo): implement custom version if bottleneck.
     return mk_app(ctx, get_false_of_true_iff_false_name(), {H});
 }
 
-expr mk_false_of_true_eq_false(type_context & ctx, expr const & H) {
+expr mk_false_of_true_eq_false(type_context_old & ctx, expr const & H) {
     // TODO(Leo): implement custom version if bottleneck.
     return mk_app(ctx, get_false_of_true_eq_false_name(), {H});
 }
 
-expr mk_not(type_context & ctx, expr const & H) {
+expr mk_not(type_context_old & ctx, expr const & H) {
     // TODO(dhs): implement custom version if bottleneck.
     return mk_app(ctx, get_not_name(), {H});
 }
 
-expr mk_absurd(type_context & ctx, expr const & Hp, expr const & Hnp, expr const & b) {
+expr mk_absurd(type_context_old & ctx, expr const & Hp, expr const & Hnp, expr const & b) {
     return mk_app(ctx, get_absurd_name(), {b, Hp, Hnp});
 }
 
-expr mk_partial_add(type_context & ctx, expr const & A) {
+expr mk_partial_add(type_context_old & ctx, expr const & A) {
     return app_builder(ctx).mk_partial_add(A);
 }
 
-expr mk_partial_mul(type_context & ctx, expr const & A) {
+expr mk_partial_mul(type_context_old & ctx, expr const & A) {
     return app_builder(ctx).mk_partial_mul(A);
 }
 
-expr mk_zero(type_context & ctx, expr const & A) {
+expr mk_zero(type_context_old & ctx, expr const & A) {
     return app_builder(ctx).mk_zero(A);
 }
 
-expr mk_one(type_context & ctx, expr const & A) {
+expr mk_one(type_context_old & ctx, expr const & A) {
     return app_builder(ctx).mk_one(A);
 }
 
-expr mk_partial_left_distrib(type_context & ctx, expr const & A) {
+expr mk_partial_left_distrib(type_context_old & ctx, expr const & A) {
     return app_builder(ctx).mk_partial_left_distrib(A);
 }
 
-expr mk_partial_right_distrib(type_context & ctx, expr const & A) {
+expr mk_partial_right_distrib(type_context_old & ctx, expr const & A) {
     return app_builder(ctx).mk_partial_right_distrib(A);
 }
 
-expr mk_ss_elim(type_context & ctx, expr const & A, expr const & ss_inst, expr const & old_e, expr const & new_e) {
+expr mk_ss_elim(type_context_old & ctx, expr const & A, expr const & ss_inst, expr const & old_e, expr const & new_e) {
     return app_builder(ctx).mk_ss_elim(A, ss_inst, old_e, new_e);
 }
 
-expr mk_false_rec(type_context & ctx, expr const & c, expr const & H) {
+expr mk_false_rec(type_context_old & ctx, expr const & c, expr const & H) {
     return app_builder(ctx).mk_false_rec(c, H);
 }
 
-expr mk_ite(type_context & ctx, expr const & c, expr const & t, expr const & e) {
+expr mk_ite(type_context_old & ctx, expr const & c, expr const & t, expr const & e) {
     bool mask[5] = {true, false, false, true, true};
     expr args[3] = {c, t, e};
     return mk_app(ctx, get_ite_name(), 5, mask, args);
 }
 
-expr mk_id_locked(type_context & ctx, expr const & type, expr const & h) {
-    level lvl = get_level(ctx, type);
-    return mk_app(mk_constant(get_id_locked_name(), {lvl}), type, h);
+expr mk_id(type_context_old & ctx, expr const & type, expr const & h) {
+    level lvl = get_level_ap(ctx, type);
+    return mk_app(mk_constant(get_id_name(), {lvl}), type, h);
 }
 
-expr mk_id_rhs(type_context & ctx, expr const & h) {
+expr mk_id(type_context_old & ctx, expr const & h) {
+    return mk_id(ctx, ctx.infer(h), h);
+}
+
+expr mk_id_rhs(type_context_old & ctx, expr const & h) {
     expr type = ctx.infer(h);
-    level lvl = get_level(ctx, type);
+    level lvl = get_level_ap(ctx, type);
     return mk_app(mk_constant(get_id_rhs_name(), {lvl}), type, h);
+}
+
+expr mk_id_delta(type_context_old & ctx, expr const & h) {
+    expr type = ctx.infer(h);
+    level lvl = get_level_ap(ctx, type);
+    return mk_app(mk_constant(get_id_delta_name(), {lvl}), type, h);
 }
 
 static bool is_eq_trans(expr const & h, expr & h1, expr & h2) {
@@ -1164,7 +1170,7 @@ static bool is_eq_self_iff_true(expr const & h, expr & t) {
     }
 }
 
-expr mk_eq_mpr(type_context & ctx, expr const & h1, expr const & h2) {
+expr mk_eq_mpr(type_context_old & ctx, expr const & h1, expr const & h2) {
     /*
        eq.mpr (eq.trans H (propext (@eq_self_iff_true t))) h2
        ==>
@@ -1179,20 +1185,21 @@ expr mk_eq_mpr(type_context & ctx, expr const & h1, expr const & h2) {
     return mk_app(ctx, get_eq_mpr_name(), h1, h2);
 }
 
-expr mk_iff_mpr(type_context & ctx, expr const & h1, expr const & h2) {
+expr mk_iff_mpr(type_context_old & ctx, expr const & h1, expr const & h2) {
     return mk_app(ctx, get_iff_mpr_name(), h1, h2);
 }
 
-expr mk_eq_mp(type_context & ctx, expr const & h1, expr const & h2) {
+expr mk_eq_mp(type_context_old & ctx, expr const & h1, expr const & h2) {
     return mk_app(ctx, get_eq_mp_name(), h1, h2);
 }
 
-expr mk_iff_mp(type_context & ctx, expr const & h1, expr const & h2) {
+expr mk_iff_mp(type_context_old & ctx, expr const & h1, expr const & h2) {
     return mk_app(ctx, get_iff_mp_name(), h1, h2);
 }
 
 void initialize_app_builder() {
     register_trace_class("app_builder");
+    register_thread_local_reset_fn([]() { get_abch().clear(); });
 }
 void finalize_app_builder() {}
 }

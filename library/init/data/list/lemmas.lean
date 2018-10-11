@@ -72,13 +72,13 @@ by induction l; simp [*]
 
 /- bind -/
 
-@[simp] lemma nil_bind (f : α → list β) : bind [] f = [] :=
-by simp [join, bind]
+@[simp] lemma nil_bind (f : α → list β) : list.bind [] f = [] :=
+by simp [join, list.bind]
 
-@[simp] lemma cons_bind (x xs) (f : α → list β) : bind (x :: xs) f = f x ++ bind xs f :=
-by simp [join, bind]
+@[simp] lemma cons_bind (x xs) (f : α → list β) : list.bind (x :: xs) f = f x ++ list.bind xs f :=
+by simp [join, list.bind]
 
-@[simp] lemma append_bind (xs ys) (f : α → list β) : bind (xs ++ ys) f = bind xs f ++ bind ys f :=
+@[simp] lemma append_bind (xs ys) (f : α → list β) : list.bind (xs ++ ys) f = list.bind xs f ++ list.bind ys f :=
 by induction xs; [refl, simp [*, cons_bind]]
 
 /- mem -/
@@ -105,7 +105,7 @@ lemma eq_or_mem_of_mem_cons {a y : α} {l : list α} : a ∈ y::l → a = y ∨ 
 assume h, h
 
 @[simp] lemma mem_append {a : α} {s t : list α} : a ∈ s ++ t ↔ a ∈ s ∨ a ∈ t :=
-by induction s; simp *
+by induction s; simp [*, or_assoc]
 
 @[rsimp] lemma mem_append_eq (a : α) (s t : list α) : (a ∈ s ++ t) = (a ∈ s ∨ a ∈ t) :=
 propext mem_append
@@ -192,8 +192,7 @@ theorem length_remove_nth : ∀ (l : list α) (i : ℕ), i < length l → length
 
 @[simp] lemma partition_eq_filter_filter (p : α → Prop) [decidable_pred p] : ∀ (l : list α), partition p l = (filter p l, filter (not ∘ p) l)
 | []     := rfl
-| (a::l) := by { by_cases p a with pa; simp [partition, filter, pa, partition_eq_filter_filter l],
-                 rw [if_neg (not_not_intro pa)], rw [if_pos pa] }
+| (a::l) := by { by_cases pa : p a; simp [partition, filter, pa, partition_eq_filter_filter l] }
 
 /- sublists -/
 
@@ -205,9 +204,9 @@ inductive sublist : list α → list α → Prop
 infix ` <+ `:50 := sublist
 
 lemma length_le_of_sublist : ∀ {l₁ l₂ : list α}, l₁ <+ l₂ → length l₁ ≤ length l₂
-| ._ ._ sublist.slnil             := le_refl 0
-| ._ ._ (sublist.cons  l₁ l₂ a s) := le_succ_of_le (length_le_of_sublist s)
-| ._ ._ (sublist.cons2 l₁ l₂ a s) := succ_le_succ (length_le_of_sublist s)
+| _ _ sublist.slnil             := le_refl 0
+| _ _ (sublist.cons  l₁ l₂ a s) := le_succ_of_le (length_le_of_sublist s)
+| _ _ (sublist.cons2 l₁ l₂ a s) := succ_le_succ (length_le_of_sublist s)
 
 /- filter -/
 @[simp] theorem filter_nil (p : α → Prop) [h : decidable_pred p] : filter p [] = [] := rfl
@@ -223,7 +222,7 @@ lemma length_le_of_sublist : ∀ {l₁ l₂ : list α}, l₁ <+ l₂ → length 
 @[simp] theorem filter_append {p : α → Prop} [h : decidable_pred p] :
   ∀ (l₁ l₂ : list α), filter p (l₁++l₂) = filter p l₁ ++ filter p l₂
 | []      l₂ := rfl
-| (a::l₁) l₂ := by by_cases p a with pa; simp [pa, filter_append]
+| (a::l₁) l₂ := by by_cases pa : p a; simp [pa, filter_append]
 
 @[simp] theorem filter_sublist {p : α → Prop} [h : decidable_pred p] : Π (l : list α), filter p l <+ l
 | []     := sublist.slnil

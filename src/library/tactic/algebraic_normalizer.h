@@ -6,8 +6,44 @@ Author: Leonardo de Moura
 */
 #pragma once
 #include <memory>
+#include "kernel/expr_maps.h"
 #include "library/type_context.h"
 #include "library/head_map.h"
+
+/*
+This is currently dead code.
+This is a partial attempt to generalize the `ac_manager` and `arith_instance` classes.
+
+It is not clear whether we will have an algebraic normalizer that automatically applies lemmas such
+as `left_inv` from
+```
+@[algebra] class is_left_inv (α : Type u) (op : α → α → α) (inv : out_param $ α → α) (o : out_param α) : Prop :=
+(left_inv : ∀ a, op (inv a) a = o)
+```
+
+Disadvantage: most of the functionality of the algebraic normalizer is subsumed by AC rewriting.
+However, the algebraic normalizer will be able to applies algebraic lemmas more efficiently than a generic
+AC rewriting engine based on AC matching.
+
+Advantage: as soon as we have an instance `is_left_inv α op inv o`, the normalizer can apply the lemma.
+Moreover, it will apply the lemma modulo other algebraic properties such as is_associative and is_commutative.
+The algebraic normalizer would use caches such as the one in `ac_manager` to efficiently identify terms to be simplified.
+The AC rewriter (aka simplifier) has to be "fed" with first order lemmas.
+For example, we cannot use the following lemma in the simplifier.
+```
+@[simp] lemma left_inv {α : Type u} {op : α → α → α} {inv : α → α} {o : α} [is_left_inv α op inv o] (a : α) :  op (inv a) a = o
+```
+There isn't a single symbol in the left-hand-side. We would have to match subterms of our goals with the
+higher order term `?op (?inv ?a) ?a` where `?op`, `?inv` and `?a` are metavariables.
+So, to be able to use simplifier, whenever we define an instance `[is_left_inv α op inv o]`, we would have to instantiate
+lemmas such as `left_inv`, create auxiliary lemmas with these instances and mark them with the `[simp]` attribute.
+In principle, this process can be automated with a new tactic.
+
+If we decide to use the AC rewriter to apply lemmas such as left_inv, then the algebraic normalize will perform
+only more complex tasks such as "fusion" where the term `k_1 * t + k_2 * t` is simplified into `k * t`, where
+`k_1`, `k_2` and `k` are numerals, and `k = k_1 + k_2`.
+
+*/
 
 namespace lean {
 struct algebraic_info {
@@ -62,13 +98,13 @@ public:
     typedef std::shared_ptr<data>                data_ptr;
 
 private:
-    type_context &                               m_ctx;
+    type_context_old &                               m_ctx;
     data_ptr                                     m_data;
 
 public:
-    algebraic_info_manager(type_context & ctx);
+    algebraic_info_manager(type_context_old & ctx);
     ~algebraic_info_manager();
-    type_context & ctx() const { return m_ctx; }
+    type_context_old & ctx() const { return m_ctx; }
     algebraic_info_ref get_info(expr const & op);
 };
 

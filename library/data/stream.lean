@@ -33,7 +33,7 @@ def drop (n : nat) (s : stream α) : stream α :=
 s n
 
 protected theorem eta (s : stream α) : head s :: tail s = s :=
-funext (λ i, begin cases i, repeat {refl} end)
+funext (λ i, begin cases i; refl end)
 
 theorem nth_zero_cons (a : α) (s : stream α) : nth 0 (a :: s) = a := rfl
 
@@ -154,7 +154,7 @@ exists.intro 0 rfl
 theorem const_eq (a : α) : const a = a :: const a :=
 begin
   apply stream.ext, intro n,
-  cases n, repeat {refl}
+  cases n; refl
 end
 
 theorem tail_const (a : α) : tail (const a) = const a :=
@@ -174,7 +174,7 @@ theorem head_iterate (f : α → α) (a : α) : head (iterate f a) = a := rfl
 
 theorem tail_iterate (f : α → α) (a : α) : tail (iterate f a) = iterate f (f a) :=
 begin
-  apply funext, intro n,
+  funext n,
   induction n with n' ih,
     {refl},
     {unfold tail iterate,
@@ -217,7 +217,7 @@ assume hh ht₁ ht₂, eq_of_bisim
   (λ s₁ s₂, head s₁ = head s₂ ∧ s₁ = tail s₁ ∧ s₂ = tail s₂)
   (λ s₁ s₂ ⟨h₁, h₂, h₃⟩,
     begin
-      constructor, exact h₁, rw [← h₂, ← h₃], repeat {constructor, repeat {assumption}}
+      constructor, exact h₁, rw [← h₂, ← h₃], repeat { constructor }; assumption
     end)
   (and.intro hh (and.intro ht₁ ht₂))
 
@@ -242,7 +242,7 @@ coinduction
 local attribute [reducible] stream
 theorem map_iterate (f : α → α) (a : α) : iterate f (f a) = map f (iterate f a) :=
 begin
-  apply funext, intro n,
+  funext n,
   induction n with n' ih,
     {refl},
     { unfold map iterate nth, dsimp,
@@ -464,7 +464,7 @@ theorem take_theorem (s₁ s₂ : stream α) : (∀ (n : nat), approx n s₁ = a
 begin
   intro h, apply stream.ext, intro n,
   induction n with n ih,
-  { have aux := h 1, unfold approx at aux, injection aux },
+  { have aux := h 1, simp [approx] at aux, exact aux },
   { have h₁ : some (nth (succ n) s₁) = some (nth (succ n) s₂),
     { rw [← nth_approx, ← nth_approx, h (succ (succ n))] },
     injection h₁ }

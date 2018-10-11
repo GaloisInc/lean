@@ -21,6 +21,7 @@ Author: Leonardo de Moura
 #include "library/scoped_ext.h"
 #include "library/aux_definition.h"
 #include "library/unfold_macros.h"
+#include "library/inductive_compiler/ginductive.h"
 #include "library/vm/vm_environment.h"
 #include "library/vm/vm_exceptional.h"
 #include "library/vm/vm_format.h"
@@ -50,8 +51,8 @@ void tactic_state_cell::dealloc() {
 
 tactic_state::tactic_state(environment const & env, options const & o, name const & decl_name, metavar_context const & ctx,
                            list<expr> const & gs, expr const & main, defeq_canonizer::state const & dcs,
-                           tactic_user_state const & us) {
-    m_ptr = new tactic_state_cell(env, o, decl_name, ctx, gs, main, dcs, us);
+                           context_cache_id const & cid, tactic_user_state const & us, tag_info const & tinfo) {
+    m_ptr = new tactic_state_cell(env, o, decl_name, ctx, gs, main, dcs, cid, us, tinfo);
     m_ptr->inc_ref();
 }
 
@@ -68,7 +69,7 @@ optional<metavar_decl> tactic_state::get_main_goal_decl() const {
 tactic_state mk_tactic_state_for(environment const & env, options const & o, name const & decl_name,
                                  metavar_context mctx, local_context const & lctx, expr const & type) {
     expr main = mctx.mk_metavar_decl(lctx, type);
-    return tactic_state(env, o, decl_name, mctx, list<expr>(main), main, defeq_canonizer::state(), tactic_user_state());
+    return tactic_state(env, o, decl_name, mctx, list<expr>(main), main, defeq_canonizer::state(), unique_id(), tactic_user_state(), tag_info());
 }
 
 tactic_state mk_tactic_state_for(environment const & env, options const & o, name const & decl_name,
@@ -78,29 +79,29 @@ tactic_state mk_tactic_state_for(environment const & env, options const & o, nam
 
 tactic_state mk_tactic_state_for_metavar(environment const & env, options const & opts, name const & decl_name,
                                          metavar_context const & mctx, expr const & mvar) {
-    return tactic_state(env, opts, decl_name, mctx, list<expr>(mvar), mvar, defeq_canonizer::state(), tactic_user_state());
+    return tactic_state(env, opts, decl_name, mctx, list<expr>(mvar), mvar, defeq_canonizer::state(), unique_id(), tactic_user_state(), tag_info());
 }
 
 tactic_state set_options(tactic_state const & s, options const & o) {
-    return tactic_state(s.env(), o, s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(), s.us());
+    return tactic_state(s.env(), o, s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(), s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_env(tactic_state const & s, environment const & env) {
-    return tactic_state(env, s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(), s.us());
+    return tactic_state(env, s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(), s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_mctx(tactic_state const & s, metavar_context const & mctx) {
     if (is_eqp(s.mctx(), mctx)) return s;
-    return tactic_state(s.env(), s.get_options(), s.decl_name(), mctx, s.goals(), s.main(), s.dcs(), s.us());
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), mctx, s.goals(), s.main(), s.dcs(), s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_mctx_dcs(tactic_state const & s, metavar_context const & mctx, defeq_can_state const & dcs) {
     if (is_eqp(s.mctx(), mctx) && is_eqp(s.dcs(), dcs)) return s;
-    return tactic_state(s.env(), s.get_options(), s.decl_name(), mctx, s.goals(), s.main(), dcs, s.us());
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), mctx, s.goals(), s.main(), dcs, s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_env_mctx(tactic_state const & s, environment const & env, metavar_context const & mctx) {
-    return tactic_state(env, s.get_options(), s.decl_name(), mctx, s.goals(), s.main(), s.dcs(), s.us());
+    return tactic_state(env, s.get_options(), s.decl_name(), mctx, s.goals(), s.main(), s.dcs(), s.cid(), s.us(), s.tinfo());
 }
 
 static list<expr> consume_solved_prefix(metavar_context const & mctx, list<expr> const & gs) {
@@ -114,12 +115,12 @@ static list<expr> consume_solved_prefix(metavar_context const & mctx, list<expr>
 
 tactic_state set_goals(tactic_state const & s, list<expr> const & gs) {
     return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), consume_solved_prefix(s.mctx(), gs),
-                        s.main(), s.dcs(), s.us());
+                        s.main(), s.dcs(), s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_mctx_goals_dcs(tactic_state const & s, metavar_context const & mctx, list<expr> const & gs, defeq_can_state const & dcs) {
     return tactic_state(s.env(), s.get_options(), s.decl_name(), mctx, consume_solved_prefix(mctx, gs), s.main(), dcs,
-                        s.us());
+                        s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_mctx_goals(tactic_state const & s, metavar_context const & mctx, list<expr> const & gs) {
@@ -129,7 +130,7 @@ tactic_state set_mctx_goals(tactic_state const & s, metavar_context const & mctx
 tactic_state set_env_mctx_goals(tactic_state const & s, environment const & env,
                                 metavar_context const & mctx, list<expr> const & gs) {
     return tactic_state(env, s.get_options(), s.decl_name(), mctx, consume_solved_prefix(mctx, gs),
-                        s.main(), s.dcs(), s.us());
+                        s.main(), s.dcs(), s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_mctx_lctx_dcs(tactic_state const & s, metavar_context const & mctx, local_context const & lctx, defeq_can_state const & dcs) {
@@ -140,7 +141,8 @@ tactic_state set_mctx_lctx_dcs(tactic_state const & s, metavar_context const & m
     }
     metavar_context new_mctx = mctx;
     expr mvar = new_mctx.mk_metavar_decl(lctx, mk_true());
-    return tactic_state(s.env(), s.get_options(), s.decl_name(), new_mctx, to_list(mvar), mvar, s.dcs(), s.us());
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), new_mctx, to_list(mvar), mvar, s.dcs(),
+                        s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_mctx_lctx(tactic_state const & s, metavar_context const & mctx, local_context const & lctx) {
@@ -149,17 +151,47 @@ tactic_state set_mctx_lctx(tactic_state const & s, metavar_context const & mctx,
 
 tactic_state set_defeq_can_state(tactic_state const & s, defeq_can_state const & dcs) {
     if (is_eqp(s.dcs(), dcs)) return s;
-    return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), dcs, s.us());
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), dcs,
+                        s.cid(), s.us(), s.tinfo());
 }
 
 tactic_state set_user_state(tactic_state const & s, tactic_user_state const & us) {
-    return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(), us);
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(),
+                        s.cid(), us, s.tinfo());
+}
+
+tactic_state set_tag_info(tactic_state const & s, tag_info const & tinfo) {
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(),
+                        s.cid(), s.us(), tinfo);
+}
+
+tactic_state set_context_cache_id(tactic_state const & s, context_cache_id const & cid) {
+    return tactic_state(s.env(), s.get_options(), s.decl_name(), s.mctx(), s.goals(), s.main(), s.dcs(),
+                        cid, s.us(), s.tinfo());
 }
 
 format tactic_state::pp_expr(formatter_factory const & fmtf, expr const & e) const {
-    type_context ctx = mk_type_context_for(*this, transparency_mode::All);
+    type_context_old ctx = mk_cacheless_type_context_for(*this, transparency_mode::All);
     formatter fmt = fmtf(env(), get_options(), ctx);
     return fmt(e);
+}
+
+static format pp_tag(list<name> const & tag) {
+    buffer<name> tmp;
+    for (auto n : tag) {
+        if (!is_internal_name(n))
+            tmp.push_back(n);
+    }
+    unsigned i = tmp.size();
+    if (i == 0) return format();
+    format r;
+    while (i > 0) {
+        --i;
+        r += format(tmp[i]);
+        if (i > 0)
+            r += comma() + space();
+    }
+    return format("case") + space() + r + line();
 }
 
 format tactic_state::pp_goal(formatter_factory const & fmtf, expr const & g, bool target_lhs_only) const {
@@ -168,11 +200,15 @@ format tactic_state::pp_goal(formatter_factory const & fmtf, expr const & g, boo
     metavar_decl decl          = mctx().get_metavar_decl(g);
     local_context lctx         = decl.get_context();
     metavar_context mctx_tmp   = mctx();
-    type_context ctx(env(), get_options(), mctx_tmp, lctx, transparency_mode::All);
+    type_context_old ctx(env(), get_options(), mctx_tmp, lctx, transparency_mode::All);
     formatter fmt              = fmtf(env(), opts, ctx);
     if (inst_mvars)
         lctx                   = lctx.instantiate_mvars(mctx_tmp);
-    format r                   = lctx.pp(fmt);
+    format r;
+    if (auto tag = get_tag_info().m_tags.find(g)) {
+        r                    += pp_tag(*tag);
+    }
+    r                         += lctx.pp(fmt);
     unsigned indent            = get_pp_indent(get_options());
     bool unicode               = get_pp_unicode(get_options());
     if (!lctx.empty())
@@ -184,7 +220,7 @@ format tactic_state::pp_goal(formatter_factory const & fmtf, expr const & g, boo
     if (target_lhs_only && is_simp_relation(env(), type, rel, lhs, rhs)) {
         r += format("|") + space() + nest(indent, fmt(lhs));
     } else {
-        format turnstile           = unicode ? format("\u22A2") /* ⊢ */ : format("|-");
+        format turnstile(unicode ? "⊢" : "|-");
         r += turnstile + space() + nest(indent, fmt(type));
     }
     if (get_pp_goal_compact(get_options()))
@@ -195,6 +231,9 @@ format tactic_state::pp_goal(formatter_factory const & fmtf, expr const & g, boo
 format tactic_state::pp_core(formatter_factory const & fmtf, bool target_lhs_only) const {
     format r;
     bool first = true;
+    unsigned num_goals = length(goals());
+    if (length(goals()) > 1)
+        r += format(num_goals) + space() + format("goals") + line();
     for (auto const & g : goals()) {
         if (first) first = false; else r += line() + line();
         r += pp_goal(fmtf, g, target_lhs_only);
@@ -230,11 +269,6 @@ transparency_mode to_transparency_mode(vm_obj const & o) {
 
 vm_obj to_obj(transparency_mode m) {
     return mk_vm_simple(static_cast<unsigned>(m));
-}
-
-
-vm_obj tactic_state_mk_empty(vm_obj const & vm_env, vm_obj const & vm_opts) {
-    return to_obj(mk_tactic_state_for(to_env(vm_env), to_options(vm_opts), "_mk_empty", local_context(), mk_true()));
 }
 
 vm_obj tactic_state_env(vm_obj const & s) {
@@ -278,7 +312,7 @@ vm_obj tactic_format_result(vm_obj const & o) {
     metavar_context mctx = s.mctx();
     expr r = mctx.instantiate_mvars(s.main());
     metavar_decl main_decl = mctx.get_metavar_decl(s.main());
-    type_context ctx(s.env(), s.get_options(), mctx, main_decl.get_context(), transparency_mode::All);
+    type_context_old ctx(s.env(), s.get_options(), mctx, main_decl.get_context(), transparency_mode::All);
     formatter_factory const & fmtf = get_global_ios().get_formatter_factory();
     formatter fmt = fmtf(s.env(), s.get_options(), ctx);
     return tactic::mk_success(to_obj(fmt(r)), s);
@@ -291,29 +325,52 @@ vm_obj tactic_target(vm_obj const & o) {
     return tactic::mk_success(to_obj(g->get_type()), s);
 }
 
-MK_THREAD_LOCAL_GET_DEF(type_context_cache_manager, get_tcm);
-
-type_context mk_type_context_for(environment const & env, options const & o, metavar_context const & mctx,
-                                 local_context const & lctx, transparency_mode m) {
-    return type_context(env, o, mctx, lctx, get_tcm(), m);
+tactic_state_context_cache::tactic_state_context_cache(tactic_state & s):
+    persistent_context_cache(s.get_cache_id(), s.get_options()),
+    m_state(set_context_cache_id(s, get_id())) {
+    s       = m_state;
 }
 
-type_context mk_type_context_for(tactic_state const & s, local_context const & lctx, transparency_mode m) {
+type_context_old tactic_state_context_cache::mk_type_context(tactic_state const & s, local_context const & lctx, transparency_mode m) {
+    lean_assert(s.get_cache_id() == m_state.get_cache_id());
+    return type_context_old(s.env(), s.mctx(), lctx, *this, m);
+}
+
+type_context_old tactic_state_context_cache::mk_type_context(tactic_state const & s, transparency_mode m) {
+    local_context lctx;
+    if (auto d = s.get_main_goal_decl()) lctx = d->get_context();
+    return mk_type_context(s, lctx, m);
+}
+
+type_context_old tactic_state_context_cache::mk_type_context(transparency_mode m) {
+    return mk_type_context(m_state, m);
+}
+
+type_context_old mk_type_context_for(environment const & env, options const & o, metavar_context const & mctx,
+                                 local_context const & lctx, transparency_mode m) {
+    return type_context_old(env, o, mctx, lctx, m);
+}
+
+type_context_old mk_type_context_for(tactic_state const & s, local_context const & lctx, transparency_mode m) {
     return mk_type_context_for(s.env(), s.get_options(), s.mctx(), lctx, m);
 }
 
-type_context mk_type_context_for(tactic_state const & s, transparency_mode m) {
+type_context_old mk_type_context_for(tactic_state const & s, transparency_mode m) {
     local_context lctx;
     if (auto d = s.get_main_goal_decl()) lctx = d->get_context();
     return mk_type_context_for(s, lctx, m);
 }
 
-type_context mk_type_context_for(vm_obj const & s) {
+type_context_old mk_type_context_for(vm_obj const & s) {
     return mk_type_context_for(tactic::to_state(s));
 }
 
-type_context mk_type_context_for(vm_obj const & s, vm_obj const & m) {
+type_context_old mk_type_context_for(vm_obj const & s, vm_obj const & m) {
     return mk_type_context_for(tactic::to_state(s), to_transparency_mode(m));
+}
+
+type_context_old mk_cacheless_type_context_for(tactic_state const & s, transparency_mode m) {
+    return mk_type_context_for(s, m);
 }
 
 static void check_closed(char const * tac_name, expr const & e) {
@@ -324,8 +381,9 @@ static void check_closed(char const * tac_name, expr const & e) {
 }
 
 vm_obj tactic_infer_type(vm_obj const & e, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s);
+    tactic_state s = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context();
     try {
         check_closed("infer_type", to_expr(e));
         return tactic::mk_success(to_obj(ctx.infer(to_expr(e))), s);
@@ -334,20 +392,26 @@ vm_obj tactic_infer_type(vm_obj const & e, vm_obj const & s0) {
     }
 }
 
-vm_obj tactic_whnf(vm_obj const & e, vm_obj const & t, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s, to_transparency_mode(t));
+vm_obj tactic_whnf(vm_obj const & e, vm_obj const & t, vm_obj const & unfold_ginductive, vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context(to_transparency_mode(t));
     try {
         check_closed("whnf", to_expr(e));
-        return tactic::mk_success(to_obj(ctx.whnf(to_expr(e))), s);
+        if (to_bool(unfold_ginductive)) {
+            return tactic::mk_success(to_obj(ctx.whnf(to_expr(e))), s);
+        } else {
+            return tactic::mk_success(to_obj(whnf_ginductive_gintro_rule(ctx, to_expr(e))), s);
+        }
     } catch (exception & ex) {
         return tactic::mk_exception(ex, s);
     }
 }
 
 vm_obj tactic_head_eta_expand(vm_obj const & e, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s);
+    tactic_state s   = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context();
     try {
         check_closed("head_eta_expand", to_expr(e));
         return tactic::mk_success(to_obj(ctx.eta_expand(to_expr(e))), s);
@@ -406,8 +470,9 @@ vm_obj tactic_zeta(vm_obj const & e0, vm_obj const & s0) {
 }
 
 vm_obj tactic_is_class(vm_obj const & e, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s);
+    tactic_state s = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context();
     try {
         check_closed("is_class", to_expr(e));
         return tactic::mk_success(mk_vm_bool(static_cast<bool>(ctx.is_class(to_expr(e)))), s);
@@ -417,8 +482,9 @@ vm_obj tactic_is_class(vm_obj const & e, vm_obj const & s0) {
 }
 
 vm_obj tactic_mk_instance(vm_obj const & e, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s);
+    tactic_state s = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context();
     try {
         check_closed("mk_instance", to_expr(e));
         if (auto r = ctx.mk_class_instance(to_expr(e))) {
@@ -442,7 +508,7 @@ static vm_obj mk_unify_exception(char const * header, expr const & e1, expr cons
         format r(header);
         unsigned indent = get_pp_indent(s.get_options());
         formatter_factory const & fmtf = get_global_ios().get_formatter_factory();
-        type_context ctx   = mk_type_context_for(s, transparency_mode::All);
+        type_context_old ctx   = mk_cacheless_type_context_for(s, transparency_mode::All);
         formatter fmt      = fmtf(s.env(), s.get_options(), ctx);
         expr e1_type       = ctx.infer(e1);
         expr e2_type       = ctx.infer(e2);
@@ -458,12 +524,14 @@ static vm_obj mk_unify_exception(char const * header, expr const & e1, expr cons
     return tactic::mk_exception(thunk, s);
 }
 
-vm_obj tactic_unify(vm_obj const & e1, vm_obj const & e2, vm_obj const & t, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s, to_transparency_mode(t));
+vm_obj tactic_unify(vm_obj const & e1, vm_obj const & e2, vm_obj const & t, vm_obj const & approx, vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx       = cache.mk_type_context(to_transparency_mode(t));
     try {
         check_closed("unify", to_expr(e1));
         check_closed("unify", to_expr(e2));
+        type_context_old::approximate_scope scope(ctx, to_bool(approx));
         bool r = ctx.is_def_eq(to_expr(e1), to_expr(e2));
         if (r) {
             return tactic::mk_success(set_mctx(s, ctx.mctx()));
@@ -476,14 +544,15 @@ vm_obj tactic_unify(vm_obj const & e1, vm_obj const & e2, vm_obj const & t, vm_o
     }
 }
 
-vm_obj tactic_is_def_eq(vm_obj const & e1, vm_obj const & e2, vm_obj const & t, vm_obj const & s0) {
-    tactic_state const & s = tactic::to_state(s0);
-    type_context ctx       = mk_type_context_for(s, to_transparency_mode(t));
-    type_context::tmp_mode_scope scope(ctx);
+vm_obj tactic_is_def_eq(vm_obj const & e1, vm_obj const & e2, vm_obj const & t, vm_obj const & approx, vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context(to_transparency_mode(t));
     try {
         check_closed("is_def_eq", to_expr(e1));
         check_closed("is_def_eq", to_expr(e2));
-        bool r = ctx.is_def_eq(to_expr(e1), to_expr(e2));
+        type_context_old::approximate_scope scope(ctx, to_bool(approx));
+        bool r = ctx.pure_is_def_eq(to_expr(e1), to_expr(e2));
         if (r) {
             return tactic::mk_success(s);
         } else {
@@ -716,7 +785,7 @@ vm_obj tactic_decl_name(vm_obj const & _s) {
 }
 
 format tactic_state::pp() const {
-    type_context ctx = mk_type_context_for(*this, transparency_mode::Semireducible);
+    type_context_old ctx = mk_cacheless_type_context_for(*this, transparency_mode::Semireducible);
     expr ts_expr     = mk_constant("tactic_state");
     optional<expr> to_fmt_inst = ctx.mk_class_instance(mk_app(mk_constant("has_to_format", {mk_level_zero()}), ts_expr));
     if (!to_fmt_inst) {
@@ -757,14 +826,26 @@ vm_obj tactic_add_aux_decl(vm_obj const & n, vm_obj const & type, vm_obj const &
     }
 }
 
-vm_obj tactic_run_io(vm_obj const &, vm_obj const & a, vm_obj const & s) {
-    vm_obj r = invoke(a, mk_io_interface(), mk_vm_unit());
+vm_obj tactic_unsafe_run_io(vm_obj const &, vm_obj const & a, vm_obj const & s) {
+    vm_obj r = invoke(a, mk_vm_unit());
     if (optional<vm_obj> a = is_io_result(r)) {
         return tactic::mk_success(*a, tactic::to_state(s));
     } else {
         optional<vm_obj> e = is_io_error(r);
         lean_assert(e);
         return tactic::mk_exception(io_error_to_string(*e), tactic::to_state(s));
+    }
+}
+
+vm_obj io_run_tactic(vm_obj const &, vm_obj const & tac, vm_obj const &) {
+    vm_state & vm  = get_vm_state();
+    tactic_state s = mk_tactic_state_for(vm.env(), vm.get_options(), "_io_run_tactic",
+                                         metavar_context(), local_context(), mk_true());
+    vm_obj r = invoke(tac, to_obj(s));
+    if (tactic::is_result_success(r)) {
+        return mk_io_result(tactic::get_success_value(r));
+    } else {
+        return mk_io_failure("tactic failed"); // TODO(Leo): improve exception message
     }
 }
 
@@ -816,8 +897,8 @@ vm_obj tactic_using_new_ref(vm_obj const &, vm_obj const &, vm_obj const & a, vm
         s = set_user_state(s, us);
         vm_obj r = invoke(t, mk_vm_simple(ref), to_obj(s));
         if (tactic::is_result_success(r)) {
-            vm_obj b = tactic::get_result_value(r);
-            s        = tactic::to_state(tactic::get_result_state(r));
+            vm_obj b = tactic::get_success_value(r);
+            s        = tactic::to_state(tactic::get_success_state(r));
             us       = s.us();
             us.dealloc(ref);
             s        = set_user_state(s, us);
@@ -873,7 +954,8 @@ vm_obj tactic_sleep(vm_obj const & msecs, vm_obj const & s0) {
 vm_obj tactic_type_check(vm_obj const & e, vm_obj const & m, vm_obj const & s0) {
     tactic_state s = tactic::to_state(s0);
     try {
-        type_context ctx = mk_type_context_for(s, to_transparency_mode(m));
+        tactic_state_context_cache cache(s);
+        type_context_old ctx = cache.mk_type_context(to_transparency_mode(m));
         check(ctx, to_expr(e));
         return tactic::mk_success(s);
     } catch (exception & ex) {
@@ -881,8 +963,71 @@ vm_obj tactic_type_check(vm_obj const & e, vm_obj const & m, vm_obj const & s0) 
     }
 }
 
+vm_obj tactic_enable_tags(vm_obj const & b, vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    tag_info tinfo = s.tinfo();
+    tinfo.m_tags_enabled = to_bool(b);
+    return tactic::mk_success(set_tag_info(s, tinfo));
+}
+
+vm_obj tactic_tags_enabled(vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    return tactic::mk_success(mk_vm_bool(s.tinfo().m_tags_enabled), s);
+}
+
+vm_obj tactic_set_tag(vm_obj const & g, vm_obj const & t, vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    tag_info tinfo = s.tinfo();
+    if (!tinfo.m_tags_enabled)
+        return tactic::mk_success(s);
+    if (is_nil(t)) {
+        tinfo.m_tags.erase(to_expr(g));
+    } else {
+        tinfo.m_tags.insert(to_expr(g), to_list_name(t));
+    }
+    return tactic::mk_success(set_tag_info(s, tinfo));
+}
+
+vm_obj tactic_get_tag(vm_obj const & g, vm_obj const & s0) {
+    tactic_state s = tactic::to_state(s0);
+    tag_info const & tinfo = s.tinfo();
+    if (auto t = tinfo.m_tags.find(to_expr(g))) {
+        return tactic::mk_success(to_obj(*t), s);
+    } else {
+        return tactic::mk_success(mk_vm_nil(), s);
+    }
+}
+
+vm_obj tactic_unfreeze_local_instances(vm_obj const & s0) {
+    tactic_state s             = tactic::to_state(s0);
+    optional<metavar_decl> g   = s.get_main_goal_decl();
+    if (!g) return mk_no_goals_exception(s);
+    local_context lctx         = g->get_context();
+    tactic_state_context_cache cache(s);
+    type_context_old ctx           = cache.mk_type_context();
+    lctx.unfreeze_local_instances();
+    expr new_mvar              = ctx.mk_metavar_decl(lctx, g->get_type());
+    ctx.assign(*s.get_main_goal(), new_mvar);
+    tactic_state new_s = set_mctx_goals(s, ctx.mctx(), cons(new_mvar, tail(s.goals())));
+    return tactic::mk_success(new_s);
+}
+
+vm_obj tactic_frozen_local_instances(vm_obj const & s0) {
+    tactic_state s             = tactic::to_state(s0);
+    optional<metavar_decl> g   = s.get_main_goal_decl();
+    if (!g) return mk_no_goals_exception(s);
+    local_context lctx         = g->get_context();
+    if (optional<local_instances> lis = lctx.get_frozen_local_instances()) {
+        buffer<expr> li_buffer;
+        for (local_instance const & li : *lis)
+            li_buffer.push_back(li.get_local());
+        return tactic::mk_success(mk_vm_some(to_obj(li_buffer)), s);
+    } else {
+        return tactic::mk_success(mk_vm_none(), s);
+    }
+}
+
 void initialize_tactic_state() {
-    DECLARE_VM_BUILTIN(name({"tactic_state", "mk_empty"}),       tactic_state_mk_empty);
     DECLARE_VM_BUILTIN(name({"tactic_state", "env"}),            tactic_state_env);
     DECLARE_VM_BUILTIN(name({"tactic_state", "format_expr"}),    tactic_state_format_expr);
     DECLARE_VM_BUILTIN(name({"tactic_state", "to_format"}),      tactic_state_to_format);
@@ -924,12 +1069,19 @@ void initialize_tactic_state() {
     DECLARE_VM_BUILTIN(name({"tactic", "open_namespaces"}),      tactic_open_namespaces);
     DECLARE_VM_BUILTIN(name({"tactic", "decl_name"}),            tactic_decl_name);
     DECLARE_VM_BUILTIN(name({"tactic", "add_aux_decl"}),         tactic_add_aux_decl);
-    DECLARE_VM_BUILTIN(name({"tactic", "run_io"}),               tactic_run_io);
+    DECLARE_VM_BUILTIN(name({"tactic", "unsafe_run_io"}),        tactic_unsafe_run_io);
     DECLARE_VM_BUILTIN(name({"tactic", "using_new_ref"}),        tactic_using_new_ref);
     DECLARE_VM_BUILTIN(name({"tactic", "read_ref"}),             tactic_read_ref);
     DECLARE_VM_BUILTIN(name({"tactic", "write_ref"}),            tactic_write_ref);
     DECLARE_VM_BUILTIN(name({"tactic", "sleep"}),                tactic_sleep);
     DECLARE_VM_BUILTIN(name({"tactic", "type_check"}),           tactic_type_check);
+    DECLARE_VM_BUILTIN(name({"tactic", "enable_tags"}),          tactic_enable_tags);
+    DECLARE_VM_BUILTIN(name({"tactic", "tags_enabled"}),         tactic_tags_enabled);
+    DECLARE_VM_BUILTIN(name({"tactic", "set_tag"}),              tactic_set_tag);
+    DECLARE_VM_BUILTIN(name({"tactic", "get_tag"}),              tactic_get_tag);
+    DECLARE_VM_BUILTIN(name({"tactic", "unfreeze_local_instances"}), tactic_unfreeze_local_instances);
+    DECLARE_VM_BUILTIN(name({"tactic", "frozen_local_instances"}),   tactic_frozen_local_instances);
+    DECLARE_VM_BUILTIN(name({"io", "run_tactic"}),               io_run_tactic);
 }
 
 void finalize_tactic_state() {

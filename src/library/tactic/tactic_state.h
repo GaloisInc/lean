@@ -11,6 +11,7 @@ Author: Leonardo de Moura
 #include "library/metavar_context.h"
 #include "library/type_context.h"
 #include "library/defeq_canonizer.h"
+#include "library/persistent_context_cache.h"
 #include "library/vm/vm.h"
 #include "library/vm/interaction_state.h"
 
@@ -28,25 +29,34 @@ public:
     void write(unsigned ref, vm_obj const & o);
 };
 
+struct tag_info {
+    bool                    m_tags_enabled{false};
+    rb_expr_map<list<name>> m_tags;
+};
+
 class tactic_state_cell {
     MK_LEAN_RC();
-    environment       m_env;
-    options           m_options;
-    name              m_decl_name;
-    metavar_context   m_mctx;
-    list<expr>        m_goals;
-    expr              m_main;
-    defeq_can_state   m_defeq_can_state;
-    tactic_user_state m_tactic_user_state;
+    environment         m_env;
+    options             m_options;
+    name                m_decl_name;
+    metavar_context     m_mctx;
+    list<expr>          m_goals;
+    expr                m_main;
+    defeq_can_state     m_defeq_can_state;
+    context_cache_id    m_cache_id;
+    tactic_user_state   m_tactic_user_state;
+    tag_info            m_tag_info;
+
     friend class tactic_state;
     void dealloc();
 public:
     tactic_state_cell(environment const & env, options const & o, name const & decl_name,
                       metavar_context const & ctx, list<expr> const & gs,
-                      expr const & main, defeq_can_state const & s, tactic_user_state const & us):
+                      expr const & main, defeq_can_state const & s,
+                      context_cache_id const & cid, tactic_user_state const & us, tag_info const & tinfo):
         m_rc(0), m_env(env), m_options(o), m_decl_name(decl_name),
         m_mctx(ctx), m_goals(gs), m_main(main), m_defeq_can_state(s),
-        m_tactic_user_state(us) {}
+        m_cache_id(cid), m_tactic_user_state(us), m_tag_info(tinfo) {}
 };
 
 class tactic_state {
@@ -60,7 +70,8 @@ private:
 public:
     tactic_state(environment const & env, options const & o, name const & decl_name,
                  metavar_context const & ctx, list<expr> const & gs,
-                 expr const & main, defeq_can_state const & s, tactic_user_state const & us);
+                 expr const & main, defeq_can_state const & s,
+                 context_cache_id const & cid, tactic_user_state const & us, tag_info const & tinfo);
     tactic_state(tactic_state const & s):m_ptr(s.m_ptr) { if (m_ptr) m_ptr->inc_ref(); }
     tactic_state(tactic_state && s):m_ptr(s.m_ptr) { s.m_ptr = nullptr; }
     ~tactic_state() { if (m_ptr) m_ptr->dec_ref(); }
@@ -78,6 +89,10 @@ public:
     defeq_can_state const & dcs() const { return get_defeq_canonizer_state(); }
     tactic_user_state const & get_user_state() const { return m_ptr->m_tactic_user_state; }
     tactic_user_state const & us() const { return get_user_state(); }
+    tag_info const & get_tag_info() const { return m_ptr->m_tag_info; }
+    tag_info const & tinfo() const { return get_tag_info(); }
+    context_cache_id get_cache_id() const { return m_ptr->m_cache_id; }
+    context_cache_id cid() const { return get_cache_id(); }
 
     tactic_state & operator=(tactic_state const & s) { LEAN_COPY_REF(s); }
     tactic_state & operator=(tactic_state && s) { LEAN_MOVE_REF(s); }
@@ -118,9 +133,9 @@ tactic_state set_mctx_goals(tactic_state const & s, metavar_context const & mctx
 tactic_state set_env_mctx_goals(tactic_state const & s, environment const & env, metavar_context const & mctx, list<expr> const & gs);
 tactic_state set_mctx_goals_dcs(tactic_state const & s, metavar_context const & mctx, list<expr> const & gs, defeq_can_state const & dcs);
 tactic_state set_defeq_can_state(tactic_state const & s, defeq_can_state const & dcs);
-tactic_state set_user_state(tactic_state const & s, tactic_user_state const & us);
 inline tactic_state set_dcs(tactic_state const & s, defeq_can_state const & dcs) { return set_defeq_can_state(s, dcs); }
-
+tactic_state set_user_state(tactic_state const & s, tactic_user_state const & us);
+tactic_state set_context_cache_id(tactic_state const & s, context_cache_id const & cid);
 
 /* Auxiliary function that returns an updated tactic_state such s' s.t. the metavariable context is mctx and
    the main goal is of the form
@@ -138,6 +153,7 @@ template<typename T> tactic_state update_option_if_undef(tactic_state const & s,
     return set_options(s, s.get_options().update_if_undef(n, v));
 }
 
+bool is_ts_safe(tactic_state const & s);
 typedef interaction_monad<tactic_state> tactic;
 
 vm_obj to_obj(tactic_state const & s);
@@ -150,15 +166,50 @@ vm_obj mk_no_goals_exception(tactic_state const & s);
 format pp_expr(tactic_state const & s, expr const & e);
 format pp_indented_expr(tactic_state const & s, expr const & e);
 
-type_context mk_type_context_for(tactic_state const & s, transparency_mode m = transparency_mode::Semireducible);
-type_context mk_type_context_for(tactic_state const & s, local_context const & lctx, transparency_mode m = transparency_mode::Semireducible);
-type_context mk_type_context_for(environment const & env, options const & o,
+/* Helper class for creating a persistent_context_cache object using the tactic_state cache id.
+
+   Note that, the `tactic_state object` is passed by reference because we update its cache id.
+   We need to do that because `persistent_context_cache` creates a new id when it takes over
+   the cache ownership. This is done to make sure it is the single owner of this cache that
+   will probably be updated.
+
+   If we do not update the tactic_state cache id, then the next time we try to access the
+   cache, a new empty cache will be created. */
+class tactic_state_context_cache : public persistent_context_cache {
+    /*
+      TODO(Leo): add name_generator to type_context_old, tactic_state, and this class.
+      When we create a `tactic_state_context_cache`:
+      1- Let `N` be the `name_generator` at `s`, then use it to create a child `name_generator` for this object.
+      2- Update `tactic_state & s` with new `N`.
+      3- Use the `name_generator` stored here to provide a child `name_generator`
+         to each `type_context_old` created using `mk_type_context`.
+
+      In this way, we don't have to propagate the name_generators back only forth.
+      However, we will have to make sure we have replaced every occurrence of mk_type_context_for
+      with this helper class. */
+    tactic_state m_state;
+public:
+    tactic_state_context_cache(tactic_state & s);
+    /* Create a type_context_old object using this cache and the initial tactic_state object. */
+    type_context_old mk_type_context(transparency_mode m = transparency_mode::Semireducible);
+    /* Create a type_context_old object using this cache and the given tactic_state object.
+
+       \pre s.get_cache_id() == m_state.get_cache_id(). */
+    type_context_old mk_type_context(tactic_state const & s, transparency_mode m = transparency_mode::Semireducible);
+    type_context_old mk_type_context(tactic_state const & s, local_context const & lctx, transparency_mode m = transparency_mode::Semireducible);
+};
+
+type_context_old mk_type_context_for(tactic_state const & s, transparency_mode m = transparency_mode::Semireducible);
+type_context_old mk_type_context_for(tactic_state const & s, local_context const & lctx, transparency_mode m = transparency_mode::Semireducible);
+type_context_old mk_type_context_for(environment const & env, options const & o,
                                  metavar_context const & mctx, local_context const & lctx, transparency_mode m = transparency_mode::Semireducible);
-type_context mk_type_context_for(vm_obj const & s);
-type_context mk_type_context_for(vm_obj const & s, vm_obj const & m);
+type_context_old mk_type_context_for(vm_obj const & s);
+type_context_old mk_type_context_for(vm_obj const & s, vm_obj const & m);
+
+type_context_old mk_cacheless_type_context_for(tactic_state const & s, transparency_mode m = transparency_mode::Semireducible);
 
 #define lean_tactic_trace(N, S, Code) lean_trace(N, {   \
-    type_context _ctx = mk_type_context_for(S);         \
+    type_context_old _ctx = mk_type_context_for(S);         \
     scope_trace_env _scope((S).env(), _ctx);            \
     Code                                                \
 })

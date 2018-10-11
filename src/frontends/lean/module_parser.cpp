@@ -34,9 +34,10 @@ module_parser::~module_parser() {}
 
 pair<cancellation_token, task<module_parser_result>>
 module_parser::resume(module_parser_result const & res, optional<std::vector<gtask>> const & dependencies) {
-    auto & s = *res.m_snapshot_at_end;
+    snapshot const & s = *res.m_snapshot_at_end;
     m_parser.m_scanner.skip_to_pos(s.m_pos);
-    m_parser.m_env = s.m_env;
+    m_parser.m_env                = s.m_env;
+    m_parser.m_ngen               = s.m_ngen;
     m_parser.m_ios.set_options(s.m_options);
     m_parser.m_local_level_decls  = s.m_lds;
     m_parser.m_local_decls        = s.m_eds;
@@ -47,7 +48,6 @@ module_parser::resume(module_parser_result const & res, optional<std::vector<gta
     m_parser.m_ignore_noncomputable = s.m_noncomputable_theory;
     m_parser.m_parser_scope_stack = s.m_parser_scope_stack;
     m_parser.m_next_inst_idx      = s.m_next_inst_idx;
-
     auto lt = res.m_lt;
     scope_log_tree_core scope_lt(&lt);
     return parse_next_command_like(dependencies);

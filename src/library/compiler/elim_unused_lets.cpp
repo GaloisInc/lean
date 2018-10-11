@@ -12,7 +12,7 @@ Author: Leonardo de Moura
 namespace lean {
 class elim_unused_lets_fn : public compiler_step_visitor {
     virtual expr visit_lambda(expr const & e) override {
-        type_context::tmp_locals locals(m_ctx);
+        type_context_old::tmp_locals locals(m_ctx);
         expr t = e;
         while (is_lambda(t)) {
             expr d = instantiate_rev(binding_domain(t), locals.size(), locals.data());
@@ -25,7 +25,7 @@ class elim_unused_lets_fn : public compiler_step_visitor {
     }
 
     virtual expr visit_let(expr const & e) override {
-        type_context::tmp_locals locals(m_ctx);
+        type_context_old::tmp_locals locals(m_ctx);
         collected_locals used_locals;
         expr t = e;
         while (is_let(t)) {
@@ -47,11 +47,11 @@ class elim_unused_lets_fn : public compiler_step_visitor {
         return copy_tag(e, m_ctx.mk_lambda(new_locals, t));
     }
 public:
-    elim_unused_lets_fn(environment const & env):compiler_step_visitor(env) {}
+    elim_unused_lets_fn(environment const & env, abstract_context_cache & cache):compiler_step_visitor(env, cache) {}
 };
 
-void elim_unused_lets(environment const & env, buffer<procedure> & procs) {
-    elim_unused_lets_fn fn(env);
+void elim_unused_lets(environment const & env, abstract_context_cache & cache, buffer<procedure> & procs) {
+    elim_unused_lets_fn fn(env, cache);
     for (auto & proc : procs)
         proc.m_code = fn(proc.m_code);
 }

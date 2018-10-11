@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 
 Author: Leonardo de Moura
 */
+#include <algorithm>
 #include <limits>
 #include "util/fresh_name.h"
 #include "util/list_fn.h"
@@ -76,6 +77,43 @@ struct depends_on_fn {
         lean_assert(std::all_of(locals, locals+num, is_local_decl_ref));
     }
 
+    bool visit_local(expr const & e) {
+        lean_assert(is_local_decl_ref(e));
+        if (std::any_of(m_locals, m_locals + m_num,
+                        [&](expr const & l) { return mlocal_name(e) == mlocal_name(l); }))
+            return true;
+
+        if (!m_lctx || m_visited_decls.contains(mlocal_name(e)))
+            return false;
+        m_visited_decls.insert(mlocal_name(e));
+        optional<local_decl> decl = m_lctx->find_local_decl(e);
+        if (!decl)
+            return false;
+        if (visit(decl->get_type()))
+            return true;
+        if (optional<expr> v = decl->get_value())
+            return visit(*v);
+        else
+            return false;
+    }
+
+    bool visit_metavar(expr const & e) {
+        lean_assert(is_metavar_decl_ref(e));
+        if (m_visited_mvars.contains(mlocal_name(e)))
+            return false;
+        m_visited_mvars.insert(mlocal_name(e));
+        optional<metavar_decl> decl = m_mctx.find_metavar_decl(e);
+        if (!decl)
+            return false;
+        if (visit(decl->get_type()))
+            return true;
+        if (auto v = m_mctx.get_assignment(e)) {
+            if (visit(*v))
+                return true;
+        }
+        return false;
+    }
+
     bool visit(expr const & e) {
         if (!has_local(e) && !has_expr_metavar(e))
             return false;
@@ -83,36 +121,13 @@ struct depends_on_fn {
         for_each(e, [&](expr const & e, unsigned) {
                 if (found) return false;
                 if (!has_local(e) && !has_expr_metavar(e)) return false;
-                if (is_local_decl_ref(e)) {
-                    if (std::any_of(m_locals, m_locals + m_num,
-                                    [&](expr const & l) { return mlocal_name(e) == mlocal_name(l); })) {
-                        found = true;
-                        return false;
-                    }
-                    if (m_lctx) {
-                        if (optional<local_decl> decl = m_lctx->find_local_decl(e)) {
-                            if (optional<expr> v = decl->get_value()) {
-                                if (!m_visited_decls.contains(decl->get_name())) {
-                                    m_visited_decls.insert(decl->get_name());
-                                    if (visit(*v)) {
-                                        found = true;
-                                        return false;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (is_local_decl_ref(e) && visit_local(e)) {
+                    found = true;
+                    return false;
                 }
-                if (is_metavar_decl_ref(e)) {
-                    if (auto v = m_mctx.get_assignment(e)) {
-                        if (!m_visited_mvars.contains(mlocal_name(e))) {
-                            m_visited_mvars.insert(mlocal_name(e));
-                            if (visit(*v)) {
-                                found = true;
-                                return false;
-                            }
-                        }
-                    }
+                if (is_metavar_decl_ref(e) && visit_metavar(e)) {
+                    found = true;
+                    return false;
                 }
                 return true;
             });
@@ -146,6 +161,17 @@ bool depends_on(local_decl const & d, metavar_context const & mctx, buffer<expr>
 
 bool depends_on(expr const & e, metavar_context const & mctx, local_context const & lctx, unsigned num, expr const * locals) {
     return depends_on_fn(mctx, lctx, num, locals)(e);
+}
+
+void local_context::freeze_local_instances(local_instances const & lis) {
+    m_local_instances = lis;
+    lean_assert(std::all_of(lis.begin(), lis.end(), [&](local_instance const & inst) {
+                return m_name2local_decl.contains(mlocal_name(inst.get_local()));
+            }));
+}
+
+void local_context::unfreeze_local_instances() {
+    m_local_instances = optional<local_instances>();
 }
 
 void local_context::insert_user_name(local_decl const &d) {
@@ -334,9 +360,17 @@ local_context local_context::remove(buffer<expr> const & locals) const {
                             }));
     /* TODO(Leo): check whether the following loop is a performance bottleneck. */
     local_context r          = *this;
-    r.m_instance_fingerprint = m_instance_fingerprint;
+    r.m_local_instances      = m_local_instances;
     for (expr const & l : locals) {
         local_decl d = get_local_decl(l);
+
+        /* frozen local instances cannot be deleted */
+        if (m_local_instances) {
+            lean_assert(std::all_of(m_local_instances->begin(), m_local_instances->end(), [&](local_instance const & inst) {
+                        return mlocal_name(inst.get_local()) != d.get_name();
+                }));
+        }
+
         r.m_name2local_decl.erase(mlocal_name(l));
         r.m_idx2local_decl.erase(d.get_idx());
         r.erase_user_name(d);
@@ -420,6 +454,7 @@ format local_context::pp(formatter const & fmt, std::function<bool(local_decl co
             }
 
             name n = sanitize_if_fresh(d.get_pp_name());
+            n = sanitize_name_generator_name(n);
 
             if (d.get_value()) {
                 if (first) first = false;
@@ -459,7 +494,8 @@ name local_context::get_unused_name(name const & suggestion) const {
 
 local_context local_context::instantiate_mvars(metavar_context & mctx) const {
     local_context r;
-    r.m_next_idx = m_next_idx;
+    r.m_next_idx        = m_next_idx;
+    r.m_local_instances = m_local_instances;
     m_idx2local_decl.for_each([&](unsigned, local_decl const & d) {
             expr new_type = mctx.instantiate_mvars(d.m_ptr->m_type);
             optional<expr> new_value;

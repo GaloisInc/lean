@@ -112,6 +112,8 @@ section comm_semiring
   @[simp] theorem dvd_refl : a ∣ a :=
   dvd.intro 1 (by simp)
 
+  local attribute [simp] mul_assoc mul_comm mul_left_comm
+
   theorem dvd_trans {a b c : α} (h₁ : a ∣ b) (h₂ : b ∣ c) : a ∣ c :=
   match h₁, h₂ with
   | ⟨d, (h₃ : b = a * d)⟩, ⟨e, (h₄ : c = b * e)⟩ :=
@@ -173,9 +175,7 @@ have 0 * a + 0 = 0 * a + 0 * a, from calc
 show 0 * a = 0, from  (add_left_cancel this).symm
 
 instance ring.to_semiring [s : ring α] : semiring α :=
-{ s with
-  mul_zero := ring.mul_zero,
-  zero_mul := ring.zero_mul }
+{ mul_zero := ring.mul_zero, zero_mul := ring.zero_mul, ..s }
 
 lemma neg_mul_eq_neg_mul [s : ring α] (a b : α) : -(a * b) = -a * b :=
 neg_eq_of_add_eq_zero
@@ -217,18 +217,18 @@ def sub_mul := @mul_sub_right_distrib
 class comm_ring (α : Type u) extends ring α, comm_semigroup α
 
 instance comm_ring.to_comm_semiring [s : comm_ring α] : comm_semiring α :=
-{ s with
-  mul_zero := mul_zero,
-  zero_mul := zero_mul }
+{ mul_zero := mul_zero, zero_mul := zero_mul, ..s }
 
 section comm_ring
   variable [comm_ring α]
 
+  local attribute [simp] add_assoc add_comm add_left_comm mul_comm
+
   lemma mul_self_sub_mul_self_eq (a b : α) : a * a - b * b = (a + b) * (a - b) :=
-  by simp [right_distrib, left_distrib]
+  begin simp [right_distrib, left_distrib], rw [add_comm (-(a*b)), add_left_comm (a*b)], simp end
 
   lemma mul_self_sub_one_eq (a : α) : a * a - 1 = (a + 1) * (a - 1) :=
-  by simp [right_distrib, left_distrib]
+  begin simp [right_distrib, left_distrib], rw [add_left_comm, add_comm (-a), add_left_comm a], simp end
 
   lemma add_mul_self_eq (a b : α) : (a + b) * (a + b) = a*a + 2*a*b + b*b :=
   calc (a + b)*(a + b) = a*a + (1+1)*a*b + b*b : by simp [right_distrib, left_distrib]

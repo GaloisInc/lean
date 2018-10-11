@@ -5,10 +5,10 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Gabriel Ebner
 */
 #pragma once
+#include <memory>
 #include "util/buffer.h"
 #include "util/thread.h"
 #include "util/cancellable.h"
-#include <memory>
 
 namespace lean {
 
@@ -61,13 +61,16 @@ class gtask_cell : public cancellable {
 
     virtual void execute() {};
 
-    gtask_cell(task_state state) : m_state(state) {}
-
     atomic<task_state>          m_state;
     std::unique_ptr<gtask_data> m_data;
     std::exception_ptr          m_exception;
 
-    gtask_cell(gtask_imp * imp, task_flags flags) : m_state(task_state::Created) {
+    gtask_cell(task_state state) :
+        m_state(state) {
+    }
+
+    gtask_cell(gtask_imp * imp, task_flags flags) :
+        m_state(task_state::Created) {
         m_data.reset(new gtask_data(imp, flags));
     }
 

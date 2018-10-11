@@ -24,6 +24,7 @@ Author: Sebastian Ullrich
 #include "library/vm/vm_pos_info.h"
 #include "frontends/lean/info_manager.h"
 #include "frontends/lean/elaborator.h"
+#include "frontends/lean/decl_util.h"
 #include "frontends/lean/parser.h"
 #include "frontends/lean/inductive_cmds.h"
 #include "util/utf8.h"
@@ -43,9 +44,9 @@ typedef interaction_monad<lean_parser_state> lean_parser;
                 catch (exception const & ex) { return lean_parser::mk_exception(ex, s); }
 
 vm_obj run_parser(parser & p, expr const & spec, buffer<vm_obj> const & args) {
-    type_context ctx(p.env(), p.get_options());
+    type_context_old ctx(p.env(), p.get_options());
     auto r = lean_parser::evaluator(ctx, p.get_options())(spec, args, lean_parser_state {&p});
-    return lean_parser::get_result_value(r);
+    return lean_parser::get_success_value(r);
 }
 
 expr parse_interactive_param(parser & p, expr const & param_ty) {
@@ -59,7 +60,7 @@ expr parse_interactive_param(parser & p, expr const & param_ty) {
     }
     try {
         vm_obj vm_parsed = run_parser(p, param_args[2]);
-        type_context ctx(p.env());
+        type_context_old ctx(p.env());
         name n("_reflect");
         lean_parser::evaluator eval(ctx, p.get_options());
         auto env = eval.compile(n, param_args[1]);
@@ -197,6 +198,17 @@ vm_obj vm_parser_tk(vm_obj const & vm_tk, vm_obj const & o) {
 vm_obj vm_parser_pexpr(vm_obj const & vm_rbp, vm_obj const & o) {
     auto const & s = lean_parser::to_state(o);
     TRY;
+        /* The macro used to encode pattern matching and recursive equations
+           currently stores whether it is meta or not.
+           This information is retrieved from a thread local object.
+           In tactic blocks, we allow untrusted code even if the surrounding declaration is non meta.
+           We use the auxiliary class `meta_definition_scope` to temporarily update the thread local object.
+           A quoted expression occurring in a tactic should use the original flag.
+           The auxiliary class `restore_decl_meta_scope` is used to restore it.
+
+           Remark: I realize this is hackish, but it addresses the issue raised at #1890.
+        */
+        restore_decl_meta_scope scope;
         auto rbp = to_unsigned(vm_rbp);
         if (auto e = s.m_p->maybe_parse_expr(rbp)) {
             return lean_parser::mk_success(to_obj(*e), s);
@@ -239,7 +251,7 @@ vm_obj vm_parser_with_input(vm_obj const &, vm_obj const & vm_p, vm_obj const & 
     if (lean_parser::is_result_exception(vm_state)) {
         return vm_state;
     }
-    auto vm_res = lean_parser::get_result_value(vm_state);
+    auto vm_res = lean_parser::get_success_value(vm_state);
 
     // figure out remaining string from end position
     pos_info pos2 = {1, 0};
@@ -256,7 +268,7 @@ vm_obj vm_parser_with_input(vm_obj const &, vm_obj const & vm_p, vm_obj const & 
     }
 
     vm_res = mk_vm_pair(vm_res, to_obj(input.substr(spos)));
-    return lean_parser::mk_result(vm_res, lean_parser::get_result_state(vm_state));
+    return lean_parser::mk_success(vm_res, lean_parser::get_success_state(vm_state));
 }
 static vm_obj vm_parser_command_like(vm_obj const & vm_s) {
     auto s = lean_parser::to_state(vm_s);
@@ -302,6 +314,27 @@ static vm_obj interactive_parse_binders(vm_obj const & vm_rbp, vm_obj const & vm
     CATCH;
 }
 
+static vm_obj vm_parser_of_tactic(vm_obj const &, vm_obj const & tac, vm_obj const & vm_s) {
+    auto s = lean_parser::to_state(vm_s);
+    tactic_state ts = mk_tactic_state_for(s.m_p->env(), s.m_p->get_options(), name("_parser_of_tactic"),
+                                          metavar_context(), local_context(), mk_true());
+    try {
+        vm_obj r = invoke(tac, to_obj(ts));
+        if (tactic::is_result_success(r)) {
+            vm_obj a = tactic::get_success_value(r);
+            tactic_state new_ts = tactic::to_state(tactic::get_success_state(r));
+            s.m_p->set_env(new_ts.env());
+            return lean_parser::mk_success(a, s);
+        } else {
+            /* Remark: the following command relies on the fact that
+               `tactic` and `parser` are both implemented using interaction_monad */
+            return lean_parser::update_exception_state(r, s);
+        }
+    } catch (exception & ex) {
+        return lean_parser::mk_exception(ex, s);
+    }
+}
+
 void initialize_vm_parser() {
     DECLARE_VM_BUILTIN(name({"lean", "parser_state", "env"}),         vm_parser_state_env);
     DECLARE_VM_BUILTIN(name({"lean", "parser_state", "options"}),     vm_parser_state_options);
@@ -315,7 +348,7 @@ void initialize_vm_parser() {
     DECLARE_VM_BUILTIN(name({"lean", "parser", "skip_info"}),         vm_parser_skip_info);
     DECLARE_VM_BUILTIN(name({"lean", "parser", "set_goal_info_pos"}), vm_parser_set_goal_info_pos);
     DECLARE_VM_BUILTIN(name({"lean", "parser", "with_input"}),        vm_parser_with_input);
-
+    DECLARE_VM_BUILTIN(name({"lean", "parser", "of_tactic"}),         vm_parser_of_tactic);
     DECLARE_VM_BUILTIN(name({"interactive", "decl_attributes", "apply"}), interactive_decl_attributes_apply);
     DECLARE_VM_BUILTIN(name({"interactive", "inductive_decl", "parse"}),  interactive_inductive_decl_parse);
     DECLARE_VM_BUILTIN(name({"interactive", "parse_binders"}),            interactive_parse_binders);

@@ -10,6 +10,12 @@ begin
   apply n
 end
 
+example : ℕ → ℕ → ℕ :=
+begin
+  assume n : ℕ × ℕ <|> assume n m : ℕ,
+  apply n
+end
+
 example : ¬false :=
 begin
   assume contr,
@@ -42,5 +48,10 @@ end
 
 example (f : ℕ → ℕ) : bool :=
 begin
-  have : ℕ, by apply f,
+  have : ℕ, by skip; apply f 0,
+end
+
+example (f : ℕ → ℕ) : bool :=
+begin
+  suffices: ℕ → bool, from this 0,
 end

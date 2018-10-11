@@ -3,7 +3,7 @@ universe variables u v u1 u2 v1 v2
 set_option pp.universes true
 
 open smt_tactic
-meta def blast : tactic unit := using_smt $ intros >> add_lemmas_from_facts >> repeat_at_most 3 ematch
+meta def blast : tactic unit := using_smt $ intros >> add_lemmas_from_facts >> iterate_at_most 3 ematch
 notation `♮` := by blast
 
 structure semigroup_morphism { α β : Type u } ( s : semigroup α ) ( t: semigroup β ) :=
@@ -25,6 +25,8 @@ attribute [simp] semigroup_morphism.multiplicative
   map := λ x, g (f x),
   multiplicative := begin intros, simp [coe_fn] end
 }
+
+local attribute [simp] mul_comm mul_assoc mul_left_comm
 
 @[reducible] definition semigroup_product { α β : Type u } ( s : semigroup α ) ( t: semigroup β ) : semigroup (α × β) := {
   mul := λ p q, (p^.fst * q^.fst, p^.snd * q^.snd),

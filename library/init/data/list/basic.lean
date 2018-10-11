@@ -4,7 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Leonardo de Moura
 -/
 prelude
-import init.logic init.data.nat.basic init.data.bool.basic
+import init.logic init.data.nat.basic init.data.bool.basic init.propext
 open decidable list
 
 universes u v w
@@ -15,6 +15,24 @@ instance (α : Type u) : inhabited (list α) :=
 variables {α : Type u} {β : Type v} {γ : Type w}
 
 namespace list
+
+protected def has_dec_eq [s : decidable_eq α] : decidable_eq (list α)
+| []      []      := is_true rfl
+| (a::as) []      := is_false (λ h, list.no_confusion h)
+| []      (b::bs) := is_false (λ h, list.no_confusion h)
+| (a::as) (b::bs) :=
+  match s a b with
+  | is_true hab  :=
+    match has_dec_eq as bs with
+    | is_true habs  := is_true (eq.subst hab (eq.subst habs rfl))
+    | is_false nabs := is_false (λ h, list.no_confusion h (λ _ habs, absurd habs nabs))
+    end
+  | is_false nab := is_false (λ h, list.no_confusion h (λ hab _, absurd hab nab))
+  end
+
+instance [decidable_eq α] : decidable_eq (list α) :=
+list.has_dec_eq
+
 @[simp] protected def append : list α → list α → list α
 | []       l := l
 | (h :: s) t := h :: (append s t)
@@ -247,13 +265,65 @@ def intersperse (sep : α) : list α → list α
 def intercalate (sep : list α) (xs : list (list α)) : list α :=
 join (intersperse sep xs)
 
-
-
-@[inline] def bind {α : Type u} {β : Type v} (a : list α) (b : α → list β) : list β :=
+@[inline] protected def bind {α : Type u} {β : Type v} (a : list α) (b : α → list β) : list β :=
 join (map b a)
 
-@[inline] def ret {α : Type u} (a : α) : list α :=
+@[inline] protected def ret {α : Type u} (a : α) : list α :=
 [a]
+
+protected def lt [has_lt α] : list α → list α → Prop
+| []      []      := false
+| []      (b::bs) := true
+| (a::as) []      := false
+| (a::as) (b::bs) := a < b ∨ (¬ b < a ∧ lt as bs)
+
+instance [has_lt α] : has_lt (list α) :=
+⟨list.lt⟩
+
+instance has_decidable_lt [has_lt α] [h : decidable_rel ((<) : α → α → Prop)] : Π l₁ l₂ : list α, decidable (l₁ < l₂)
+| []      []      := is_false not_false
+| []      (b::bs) := is_true trivial
+| (a::as) []      := is_false not_false
+| (a::as) (b::bs) :=
+  match h a b with
+  | is_true h₁  := is_true (or.inl h₁)
+  | is_false h₁ :=
+    match h b a with
+    | is_true h₂  := is_false (λ h, or.elim h (λ h, absurd h h₁) (λ ⟨h, _⟩, absurd h₂ h))
+    | is_false h₂ :=
+      match has_decidable_lt as bs with
+      | is_true h₃  := is_true (or.inr ⟨h₂, h₃⟩)
+      | is_false h₃ := is_false (λ h, or.elim h (λ h, absurd h h₁) (λ ⟨_, h⟩, absurd h h₃))
+      end
+    end
+  end
+
+@[reducible] protected def le [has_lt α] (a b : list α) : Prop :=
+¬ b < a
+
+instance [has_lt α] : has_le (list α) :=
+⟨list.le⟩
+
+instance has_decidable_le [has_lt α] [h : decidable_rel ((<) : α → α → Prop)] : Π l₁ l₂ : list α, decidable (l₁ ≤ l₂) :=
+λ a b, not.decidable
+
+lemma le_eq_not_gt [has_lt α] : ∀ l₁ l₂ : list α, (l₁ ≤ l₂) = ¬ (l₂ < l₁) :=
+λ l₁ l₂, rfl
+
+lemma lt_eq_not_ge [has_lt α] [decidable_rel ((<) : α → α → Prop)] : ∀ l₁ l₂ : list α, (l₁ < l₂) = ¬ (l₂ ≤ l₁) :=
+λ l₁ l₂,
+  show (l₁ < l₂) = ¬ ¬ (l₁ < l₂), from
+  eq.subst (propext (not_not_iff (l₁ < l₂))).symm rfl
+
+/--  `is_prefix_of l₁ l₂` returns `tt` iff `l₁` is a prefix of `l₂`. -/
+def is_prefix_of [decidable_eq α] : list α → list α → bool
+| []      _       := tt
+| _       []      := ff
+| (a::as) (b::bs) := to_bool (a = b) && is_prefix_of as bs
+
+/--  `is_suffix_of l₁ l₂` returns `tt` iff `l₁` is a suffix of `l₂`. -/
+def is_suffix_of [decidable_eq α] (l₁ l₂ : list α) : bool :=
+is_prefix_of l₁.reverse l₂.reverse
 
 end list
 

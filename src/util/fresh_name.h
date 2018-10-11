@@ -6,6 +6,7 @@ Author: Leonardo de Moura
 */
 #pragma once
 #include "util/name.h"
+#include "util/name_generator.h"
 
 namespace lean {
 /** \brief Create a unique fresh name. This operation is thread-safe, and it guarantees the names are unique

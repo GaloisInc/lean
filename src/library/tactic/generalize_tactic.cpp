@@ -12,10 +12,11 @@ Author: Leonardo de Moura
 #include "library/tactic/kabstract.h"
 
 namespace lean {
-vm_obj generalize(transparency_mode m, expr const & e, name const & id, tactic_state const & s) {
+static vm_obj generalize(transparency_mode m, expr const & e, name const & id, tactic_state s) {
     optional<metavar_decl> g = s.get_main_goal_decl();
     if (!g) return mk_no_goals_exception(s);
-    type_context ctx = mk_type_context_for(s, m);
+    tactic_state_context_cache cache(s);
+    type_context_old ctx = cache.mk_type_context(m);
     expr target = ctx.instantiate_mvars(g->get_type());
     expr target_abst = kabstract(ctx, target, e);
     if (closed(target_abst))
@@ -27,10 +28,9 @@ vm_obj generalize(transparency_mode m, expr const & e, name const & id, tactic_s
     } catch (exception & ex) {
         return tactic::mk_exception(nested_exception("generalize tactic failed, result is not type correct", ex), s);
     }
-    metavar_context mctx = ctx.mctx();
-    expr mvar     = mctx.mk_metavar_decl(g->get_context(), new_type);
-    mctx.assign(head(s.goals()), mk_app(mvar, e));
-    return tactic::mk_success(set_mctx_goals(s, mctx, cons(mvar, tail(s.goals()))));
+    expr mvar     = ctx.mk_metavar_decl(g->get_context(), new_type);
+    ctx.assign(head(s.goals()), mk_app(mvar, e));
+    return tactic::mk_success(set_mctx_goals(s, ctx.mctx(), cons(mvar, tail(s.goals()))));
 }
 
 vm_obj tactic_generalize(vm_obj const & e, vm_obj const & n, vm_obj const & m, vm_obj const & s) {

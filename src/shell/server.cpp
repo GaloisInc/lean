@@ -453,6 +453,8 @@ void server::handle_request(server::cmd_req const & req) {
     } else if (command == "long_sleep") {
         chrono::milliseconds small_delay(10000);
         this_thread::sleep_for(small_delay);
+    } else if (command == "sync_output") {
+        taskq().wait_for_finish(this->m_lt.get_root().wait_for_finish());
     } else {
         send_msg(cmd_res(req.m_seq_num, std::string("unknown command")));
     }
@@ -477,7 +479,12 @@ void server::handle_async_response(server::cmd_req const & req, task<cmd_res> co
 
 server::cmd_res server::handle_sync(server::cmd_req const & req) {
     std::string new_file_name = req.m_payload.at("file_name");
-    std::string new_content = req.m_payload.at("content");
+    std::string new_content;
+    if (req.m_payload.count("content")) {
+        new_content = req.m_payload.at("content");
+    } else {
+        new_content = load_module(new_file_name, /* can_use_olean */ false)->m_contents;
+    }
 
     auto mtime = time(nullptr);
 
@@ -531,7 +538,7 @@ void parse_breaking_at_pos(module_id const & mod_id, std::shared_ptr<module_info
         snap->m_cancel = global_cancellation_token();
         snap->m_next = nullptr;
 
-        auto p = std::make_shared<module_parser>(mod_id, *mod_info->m_lean_contents, environment(), mk_dummy_loader());
+        auto p = std::make_shared<module_parser>(mod_id, mod_info->m_contents, environment(), mk_dummy_loader());
         p->save_info(false);
         p->use_separate_tasks(false);
         p->break_at_pos(pos, complete);
@@ -550,10 +557,10 @@ json server::autocomplete(std::shared_ptr<module_info const> const & mod_info, b
 
     if (auto snap = get_closest_snapshot(mod_info, pos)) {
         try {
-            parse_breaking_at_pos(mod_info->m_mod, mod_info, pos, true);
+            parse_breaking_at_pos(mod_info->m_id, mod_info, pos, true);
         } catch (break_at_pos_exception & e) {
             report_completions(snap->m_snapshot_at_end->m_env, snap->m_snapshot_at_end->m_options,
-                               pos0, skip_completions, m_path, mod_info->m_mod.c_str(),
+                               pos0, skip_completions, m_path, mod_info->m_id.c_str(),
                                e, j);
         } catch (throwable & ex) {}
     }
@@ -598,7 +605,7 @@ std::vector<info_manager> get_info_managers(log_tree const & t) {
 json server::info(std::shared_ptr<module_info const> const & mod_info, pos_info const & pos) {
     json j;
     try {
-        parse_breaking_at_pos(mod_info->m_mod, mod_info, pos);
+        parse_breaking_at_pos(mod_info->m_id, mod_info, pos);
     } catch (break_at_pos_exception & e) {
         auto opts = m_ios.get_options();
         auto env = m_initial_env;
@@ -672,7 +679,7 @@ server::cmd_res server::handle_search(server::cmd_req const & req) {
 
     std::vector<pair<std::string, environment>> envs_to_search;
     for (auto & mod : m_mod_mgr->get_all_modules()) {
-        envs_to_search.emplace_back(mod->m_mod, mod->get_latest_env());
+        envs_to_search.emplace_back(mod->m_id, mod->get_latest_env());
     }
 
     std::vector<json> results;
@@ -684,10 +691,10 @@ server::cmd_res server::handle_search(server::cmd_req const & req) {
     return cmd_res(req.m_seq_num, j);
 }
 
-std::tuple<std::string, module_src, time_t> server::load_module(module_id const & id, bool can_use_olean) {
+std::shared_ptr<module_info> server::load_module(module_id const & id, bool can_use_olean) {
     if (m_open_files.count(id)) {
         auto & ef = m_open_files[id];
-        return std::make_tuple(ef.m_content, module_src::LEAN, ef.m_mtime);
+        return std::make_shared<module_info>(id, ef.m_content, module_src::LEAN, ef.m_mtime);
     }
     return m_fs_vfs.load_module(id, can_use_olean);
 }

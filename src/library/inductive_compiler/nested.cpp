@@ -80,12 +80,9 @@ namespace lean {
 
 static name * g_nest_prefix = nullptr;
 
-static expr mk_local_for(expr const & b) { return mk_local(mk_fresh_name(), binding_name(b), binding_domain(b), binding_info(b)); }
-static expr mk_local_for(expr const & b, name const & n) { return mk_local(mk_fresh_name(), n, binding_domain(b), binding_info(b)); }
-static expr mk_local_pp(name const & n, expr const & ty) { return mk_local(mk_fresh_name(), n, ty, binder_info()); }
-
 class add_nested_inductive_decl_fn {
     environment                   m_env;
+    name_generator &              m_ngen;
     options                       m_opts;
     name_map<implicit_infer_kind> m_implicit_infer_map;
     // Note(dhs): m_nested_decl is morally const, but we make it non-const to pass around sizeof_lemmas
@@ -93,7 +90,7 @@ class add_nested_inductive_decl_fn {
     bool                          m_is_trusted;
     ginductive_decl               m_inner_decl;
 
-    type_context                  m_tctx;
+    type_context_old                  m_tctx;
 
     expr                          m_nested_occ;
 
@@ -117,6 +114,10 @@ class add_nested_inductive_decl_fn {
     unsigned get_curr_ind_idx() { lean_assert(m_in_define_nested_irs); return m_pack_arity.size() - 1; }
     unsigned get_curr_ir_idx() { lean_assert(m_in_define_nested_irs); return m_pack_arity[get_curr_ind_idx()].size() - 1; }
     unsigned get_curr_ir_arg_idx() { lean_assert(m_in_define_nested_irs); return m_pack_arity[get_curr_ind_idx()][get_curr_ir_idx()].size(); }
+
+    expr mk_local_for(expr const & b) { return mk_local(m_ngen.next(), binding_name(b), binding_domain(b), binding_info(b)); }
+    expr mk_local_for(expr const & b, name const & n) { return mk_local(m_ngen.next(), n, binding_domain(b), binding_info(b)); }
+    expr mk_local_pp(name const & n, expr const & ty) { return mk_local(m_ngen.next(), n, ty, binder_info()); }
 
     // For sizeof
     bool                          m_has_sizeof{false};
@@ -226,7 +227,7 @@ class add_nested_inductive_decl_fn {
         return is_constant(fn) && const_name(fn).is_string() && const_name(fn).get_string() == std::string("sizeof");
     }
 
-    static optional<expr> unfold_sizeof(type_context & tctx, expr const & e) {
+    static optional<expr> unfold_sizeof(type_context_old & tctx, expr const & e) {
         buffer<expr> args;
         expr fn = get_app_args(e, args);
 
@@ -234,7 +235,7 @@ class add_nested_inductive_decl_fn {
         if (args.size() == 3 && is_constant(fn) && const_name(fn) == get_sizeof_name()) {
             // Note(dhs): *.sizeof is irreducible, and *.sizeof_inst are reduced when using transparency_mode::Instances
             // Here we want to reduce only sizeof_inst to expose the basic *.sizeof application.
-            type_context::transparency_scope scope(tctx, transparency_mode::Instances);
+            type_context_old::transparency_scope scope(tctx, transparency_mode::Instances);
             expr inst = tctx.whnf(args[1]);
             if (is_app(inst) && is_sizeof_app(app_arg(inst))) {
                 expr new_e = mk_app(app_arg(tctx.whnf(args[1])), args[2]);
@@ -247,7 +248,7 @@ class add_nested_inductive_decl_fn {
         return none_expr();
     }
 
-    expr force_unfold_sizeof(type_context & ctx, expr const & e) {
+    expr force_unfold_sizeof(type_context_old & ctx, expr const & e) {
         if (auto r = unfold_sizeof(ctx, e)) {
             return *r;
         } else {
@@ -255,7 +256,7 @@ class add_nested_inductive_decl_fn {
         }
     }
 
-    expr safe_whnf(type_context & tctx, expr const & e) {
+    expr safe_whnf(type_context_old & tctx, expr const & e) {
         expr r = tctx.whnf_head_pred(e, [&](expr const & t) {
                 expr fn = get_app_fn(t);
                 if (!is_constant(fn))
@@ -276,7 +277,7 @@ class add_nested_inductive_decl_fn {
 
     void add_inner_decl() {
         try {
-            m_env = add_inner_inductive_declaration(m_env, m_opts, m_implicit_infer_map, m_inner_decl, m_is_trusted);
+            m_env = add_inner_inductive_declaration(m_env, m_ngen, m_opts, m_implicit_infer_map, m_inner_decl, m_is_trusted);
         } catch (exception & ex) {
             throw nested_exception(sstream() << "nested inductive type compiled to invalid inductive type", ex);
         }
@@ -316,7 +317,7 @@ class add_nested_inductive_decl_fn {
     }
 
     expr mk_pack_injective_type(name const & pack_name, optional<unsigned> pack_arity = optional<unsigned>()) {
-        type_context::tmp_locals locals(m_tctx);
+        type_context_old::tmp_locals locals(m_tctx);
         buffer<expr> all_args;
         expr full_ty = m_tctx.infer(mk_constant(pack_name, m_nested_decl.get_levels()));
         expr ty = full_ty;
@@ -770,7 +771,7 @@ class add_nested_inductive_decl_fn {
         initialize_synth_lctx();
         if (!m_has_sizeof) return;
         for (unsigned ind_idx = 0; ind_idx < m_nested_decl.get_num_inds(); ++ind_idx) {
-            type_context tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx);
+            type_context_old tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx);
 
             expr const & ind = m_nested_decl.get_ind(ind_idx);
             name inner_sizeof_name = mk_sizeof_name(mlocal_name(m_inner_decl.get_ind(ind_idx)));
@@ -836,7 +837,7 @@ class add_nested_inductive_decl_fn {
             expr c_inner_sizeof = mk_app(mk_app(mk_constant(inner_sizeof_name, m_nested_decl.get_levels()), m_inner_decl.get_params()), m_param_insts);
 
             for (unsigned ir_idx = 0; ir_idx < m_nested_decl.get_num_intro_rules(ind_idx); ++ir_idx) {
-                type_context tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx);
+                type_context_old tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx);
 
                 expr ty = tctx_synth.whnf(mlocal_type(ind));
                 buffer<expr> indices;
@@ -861,7 +862,7 @@ class add_nested_inductive_decl_fn {
                     expr local = mk_local_for(ir_ty);
                     locals.push_back(local);
                     expr candidate = mk_app(tctx_synth, get_sizeof_name(), local);
-                    type_context stctx(m_env, options(), tctx_synth.lctx(), transparency_mode::Semireducible);
+                    type_context_old stctx(m_env, options(), tctx_synth.lctx(), transparency_mode::Semireducible);
                     if (!stctx.is_def_eq(candidate, mk_constant(get_nat_zero_name())))
                         rhs = mk_nat_add(rhs, candidate);
                     ir_ty = tctx_synth.whnf(instantiate(binding_body(ir_ty), local));
@@ -879,7 +880,7 @@ class add_nested_inductive_decl_fn {
 
                 expr lhs_alt;
                 {
-                    type_context ntctx(m_env, options(), tctx_synth.lctx(), transparency_mode::None);
+                    type_context_old ntctx(m_env, options(), tctx_synth.lctx(), transparency_mode::None);
                     lhs_alt = mk_app(tctx_synth, get_sizeof_name(), ntctx.whnf(mk_app(mk_app(d_c_ir.get_value(), m_inner_decl.get_params()), locals)));
                 }
 
@@ -1456,7 +1457,7 @@ class add_nested_inductive_decl_fn {
     }
 
     simp_result force_eq_rec(expr const & rec_fn, buffer<expr> const & rec_args) {
-        // See comments above prove_eq_rec_invertible(type_context & ctx, expr const & e) at equation_compiler/util.cpp.
+        // See comments above prove_eq_rec_invertible(type_context_old & ctx, expr const & e) at equation_compiler/util.cpp.
         lean_assert(is_constant(rec_fn, get_eq_rec_name()) && rec_args.size() == 6);
         expr B      = rec_args[0];
         expr from   = rec_args[1]; /* (f (g (f a))) */
@@ -1494,7 +1495,7 @@ class add_nested_inductive_decl_fn {
         expr f_a_eq_f_a = mk_eq(m_tctx, f_a, f_a);
         /* (fun H : f a = f a, eq.refl (h a)) */
         expr pr_minor   = mk_lambda("_H", f_a_eq_f_a, refl_h_a);
-        type_context::tmp_locals aux_locals(m_tctx);
+        type_context_old::tmp_locals aux_locals(m_tctx);
         expr x          = aux_locals.push_local("_x", A);
         /* Remark: we cannot use mk_app(f, x) in the following line.
            Reason: f may have implicit arguments. So, app_fn(f_x) is not equal to f in general,
@@ -1541,7 +1542,7 @@ class add_nested_inductive_decl_fn {
             return simplify_fn::post(e, parent);
         }
     public:
-        sizeof_simplify_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, simp_config const & cfg):
+        sizeof_simplify_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, simp_config const & cfg):
             simplify_fn(ctx, dcs, slss, list<name>(), cfg) {}
     };
 
@@ -1554,6 +1555,7 @@ class add_nested_inductive_decl_fn {
         cfg.m_canonize_proofs    = false;
         cfg.m_use_axioms         = false;
         cfg.m_zeta               = false;
+        cfg.m_constructor_eq     = false;
         return cfg;
     }
 
@@ -1561,8 +1563,8 @@ class add_nested_inductive_decl_fn {
         environment env = set_reducible(m_env, get_sizeof_name(), reducible_status::Irreducible, false);
         env = set_reducible(env, get_has_add_add_name(), reducible_status::Irreducible, false);
 
-        type_context tctx(env, m_tctx.get_options(), lctx, transparency_mode::Semireducible);
-        type_context tctx_whnf(env, m_tctx.get_options(), lctx, transparency_mode::None);
+        type_context_old tctx(env, m_tctx.get_options(), lctx, transparency_mode::Semireducible);
+        type_context_old tctx_whnf(env, m_tctx.get_options(), lctx, transparency_mode::None);
         simp_lemmas all_lemmas = use_sizeof ? join(m_lemmas, m_nested_decl.get_sizeof_lemmas()) : m_lemmas;
         for (expr const & H : Hs) {
             expr H_type = tctx_whnf.infer(H);
@@ -1588,23 +1590,22 @@ class add_nested_inductive_decl_fn {
         lean_trace(name({"inductive_compiler", "nested", "prove"}), tout() << "[goal]: " << thm << "\n";);
 
         expr ty = thm;
-        metavar_context mctx;
-
-        // Note: type_context only used to manage locals and abstract at the end
-        type_context tctx(m_env, m_tctx.get_options(), use_sizeof ? m_synth_lctx : local_context());
-        type_context::tmp_locals locals(tctx);
+        // Note: type_context_old only used to manage locals and abstract at the end
+        type_context_old ctx(m_env, m_tctx.get_options(), use_sizeof ? m_synth_lctx : local_context());
+        type_context_old::tmp_locals locals(ctx);
 
         while (is_pi(ty)) {
             expr l = locals.push_local_from_binding(ty);
             ty = instantiate(binding_body(ty), l);
         }
         expr H = locals.as_buffer().back();
-        expr goal = mctx.mk_metavar_decl(tctx.lctx(), ty);
+        expr goal = ctx.mk_metavar_decl(ctx.lctx(), ty);
         list<list<expr> > subgoal_hypotheses;
         hsubstitution_list subgoal_substitutions;
         list<name> ns;
-        list<expr> subgoals = induction(tctx.env(), tctx.get_options(), transparency_mode::None, mctx,
-                                        goal, H, rec_name, ns, &subgoal_hypotheses, &subgoal_substitutions);
+        metavar_context mctx = ctx.mctx();
+        list<expr> subgoals  = induction(ctx.env(), ctx.get_options(), transparency_mode::None, mctx,
+                                         goal, H, rec_name, ns, &subgoal_hypotheses, &subgoal_substitutions);
 
         for_each2(subgoals, subgoal_hypotheses, [&](expr const & m, list<expr> const & Hs) {
                 metavar_decl d = mctx.get_metavar_decl(m);
@@ -1643,7 +1644,7 @@ class add_nested_inductive_decl_fn {
 
     void prove_primitive_pack_sizeof(buffer<expr> const & index_locals) {
         name n = mk_primitive_name(fn_type::SIZEOF_PACK);
-        type_context tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx, transparency_mode::Semireducible);
+        type_context_old tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx, transparency_mode::Semireducible);
 
         expr x_unpacked = mk_local_pp("x_unpacked", mk_app(m_nested_occ, index_locals));
         expr lhs = force_unfold_sizeof(tctx_synth, mk_app(tctx_synth, get_sizeof_name(), mk_app(mk_app(m_primitive_pack, index_locals), x_unpacked)));
@@ -1697,7 +1698,7 @@ class add_nested_inductive_decl_fn {
 
     void prove_nested_pack_sizeof(expr const & start, expr const & /* end */, expr const & nested_pack, buffer<expr> const & index_locals, unsigned nest_idx) {
         name n = mk_nested_name(fn_type::SIZEOF_PACK, nest_idx);
-        type_context tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx);
+        type_context_old tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx);
 
         expr x_unpacked = mk_local_pp("x_unpacked", mk_app(start, index_locals));
         expr lhs = force_unfold_sizeof(tctx_synth, mk_app(tctx_synth, get_sizeof_name(), mk_app(mk_app(nested_pack, index_locals), x_unpacked)));
@@ -1731,7 +1732,7 @@ class add_nested_inductive_decl_fn {
         lean_assert(is_constant(fn) && const_name(fn) == get_eq_name());
         buffer<expr> pi_args;
 
-        type_context tctx(m_env, m_tctx.get_options(), transparency_mode::Semireducible);
+        type_context_old tctx(m_env, m_tctx.get_options(), transparency_mode::Semireducible);
 
         expr ty = safe_whnf(tctx, args[0]);
         while (is_pi(ty)) {
@@ -1781,7 +1782,7 @@ class add_nested_inductive_decl_fn {
 
     void prove_pi_pack_sizeof(expr const & pi_pack, buffer<expr> const & ldeps, expr const & nested_pack_fn, expr const & arg_ty) {
         name n = mk_pi_name(fn_type::SIZEOF_PACK);
-        type_context tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx, transparency_mode::Semireducible);
+        type_context_old tctx_synth(m_env, m_tctx.get_options(), m_synth_lctx, transparency_mode::Semireducible);
 
         expr x_unpacked = mk_local_pp("x_unpacked", arg_ty);
         expr lhs = force_unfold_sizeof(tctx_synth, mk_app(tctx_synth, get_sizeof_name(), mk_app(pi_pack, x_unpacked)));
@@ -2080,11 +2081,11 @@ class add_nested_inductive_decl_fn {
             }
         }
     public:
-        assumption_simplify_fn(type_context & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, simp_config const & cfg):
+        assumption_simplify_fn(type_context_old & ctx, defeq_canonizer::state & dcs, simp_lemmas const & slss, simp_config const & cfg):
             simplify_fn(ctx, dcs, slss, list<name>(), cfg) {}
     };
 
-    expr intros_simp_prove_conjuncts(type_context & tctx, simp_lemmas const & slss, expr const & tgt) {
+    expr intros_simp_prove_conjuncts(type_context_old & tctx, simp_lemmas const & slss, expr const & tgt) {
         simp_config cfg = get_simp_config();
         defeq_can_state dcs;
 
@@ -2116,7 +2117,7 @@ class add_nested_inductive_decl_fn {
     expr prove_nested_injective(expr const & inj_type, simp_lemmas const & slss, name const & inj_arrow_name) {
         lean_trace(name({"inductive_compiler", "nested", "injective"}), tout() << "[try to prove]: " << inj_type << "\n";);
 
-        type_context tctx(m_env, m_opts);
+        type_context_old tctx(m_env, m_opts);
         buffer<expr> hyps;
 
         expr ty = inj_type;
@@ -2143,7 +2144,7 @@ class add_nested_inductive_decl_fn {
         buffer<name> new_hyps;
         while (optional<tactic_state> o_s = intron(1, s, new_hyps, true)) {
             s = *o_s;
-            type_context tctx = mk_type_context_for(s);
+            type_context_old tctx = mk_type_context_for(s);
             local_decl hyp_decl = tctx.lctx().get_local_decl(new_hyps.back());
 
             expr A, lhs, B, rhs;
@@ -2167,7 +2168,7 @@ class add_nested_inductive_decl_fn {
 
         buffer<name> new_hyps;
         s = *intron(1, s, new_hyps, true);
-        type_context tctx = mk_type_context_for(s);
+        type_context_old tctx = mk_type_context_for(s);
         local_decl hyp_decl = tctx.lctx().get_local_decl(new_hyps.back());
 
         expr A, lhs, B, rhs;
@@ -2181,7 +2182,7 @@ class add_nested_inductive_decl_fn {
         }
 
         if (is_heq(s.get_main_goal_decl()->get_type(), A, lhs, B, rhs)) {
-            type_context tctx = mk_type_context_for(s);
+            type_context_old tctx = mk_type_context_for(s);
             lean_assert(tctx.is_def_eq(A, B));
             expr e = mk_app(tctx, get_heq_of_eq_name(), 3, A, lhs, rhs);
             s = *apply(tctx, false, false, e, s);
@@ -2190,36 +2191,41 @@ class add_nested_inductive_decl_fn {
         lean_verify(is_eq(hyp_decl.get_type(), A, lhs, rhs));
 
         unsigned arity = get_app_num_args(lhs);
-        tctx = mk_type_context_for(s);
-        name H_unpack_name({"H_unpack"});
-        expr H_unpack_type = mk_eq(tctx, mk_app(tctx, unpack_name, arity, lhs), mk_app(tctx, unpack_name, arity, rhs));
-        s = *tactic::is_success(assert_define_core(true, H_unpack_name, H_unpack_type, s));
-        tctx = mk_type_context_for(s);
+        {
+            type_context_old tctx = mk_type_context_for(s);
+            name H_unpack_name({"H_unpack"});
+            expr H_unpack_type = mk_eq(tctx, mk_app(tctx, unpack_name, arity, lhs), mk_app(tctx, unpack_name, arity, rhs));
+            s = *tactic::is_success(assert_define_core(true, H_unpack_name, H_unpack_type, s));
+            {
+                type_context_old tctx = mk_type_context_for(s);
+                simp_config cfg = get_simp_config();
+                defeq_can_state dcs;
+                simp_lemmas slss;
+                slss = add(tctx, slss, hyp_decl.get_name(), hyp_decl.get_type(), hyp_decl.mk_ref(), LEAN_DEFAULT_PRIORITY);
+                simp_result r = finalize(tctx, get_eq_name(), simplify_fn(tctx, dcs, slss, list<name>(), cfg)(get_eq_name(), s.get_main_goal_decl()->get_type()));
+                lean_verify(is_eq(r.get_new(), lhs, rhs));
+                lean_assert(tctx.is_def_eq(lhs, rhs));
+                s = *apply(tctx, false, false, mk_eq_mpr(tctx, r.get_proof(), mk_eq_refl(tctx, lhs)), s);
 
-        simp_config cfg = get_simp_config();
-        defeq_can_state dcs;
-        simp_lemmas slss;
-        slss = add(tctx, slss, hyp_decl.get_name(), hyp_decl.get_type(), hyp_decl.mk_ref(), LEAN_DEFAULT_PRIORITY);
-        simp_result r = finalize(tctx, get_eq_name(), simplify_fn(tctx, dcs, slss, list<name>(), cfg)(get_eq_name(), s.get_main_goal_decl()->get_type()));
-        lean_verify(is_eq(r.get_new(), lhs, rhs));
-        lean_assert(tctx.is_def_eq(lhs, rhs));
-        s = *apply(tctx, false, false, mk_eq_mpr(tctx, r.get_proof(), mk_eq_refl(tctx, lhs)), s);
+                s = *intron(1, s, new_hyps, true);
+                {
+                    type_context_old tctx = mk_type_context_for(s);
+                    local_decl H_unpack_decl = tctx.lctx().get_local_decl(new_hyps.back());
 
-        s = *intron(1, s, new_hyps, true);
-        tctx = mk_type_context_for(s);
-        local_decl H_unpack_decl = tctx.lctx().get_local_decl(new_hyps.back());
-
-        slss = simp_lemmas();
-        slss = add(tctx, slss, unpack_pack_name, LEAN_DEFAULT_PRIORITY);
-        r = finalize(tctx, get_eq_name(), simplify_fn(tctx, dcs, slss, list<name>(), cfg)(get_eq_name(), H_unpack_decl.get_type()));
-        s = *apply(tctx, false, false, mk_eq_mp(tctx, r.get_proof(), H_unpack_decl.mk_ref()), s);
-        return s;
+                    slss = simp_lemmas();
+                    slss = add(tctx, slss, unpack_pack_name, LEAN_DEFAULT_PRIORITY);
+                    r = finalize(tctx, get_eq_name(), simplify_fn(tctx, dcs, slss, list<name>(), cfg)(get_eq_name(), H_unpack_decl.get_type()));
+                    s = *apply(tctx, false, false, mk_eq_mp(tctx, r.get_proof(), H_unpack_decl.mk_ref()), s);
+                    return s;
+                }
+            }
+        }
     }
 
     tactic_state prove_pack_injective_easy_direction(tactic_state const & s0) {
         buffer<name> new_hyps;
         tactic_state s = *intron(1, s0, new_hyps, true);
-        type_context tctx = mk_type_context_for(s);
+        type_context_old tctx = mk_type_context_for(s);
         local_decl hyp_decl = tctx.lctx().get_local_decl(new_hyps.back());
 
         expr A, lhs, B, rhs;
@@ -2232,32 +2238,34 @@ class add_nested_inductive_decl_fn {
             hyp_decl = *(s.get_main_goal_decl()->get_context().find_local_decl_from_user_name(h_name));
         }
         expr goal_type = s.get_main_goal_decl()->get_type();
-        tctx = mk_type_context_for(s);
-        simp_config cfg = get_simp_config();
-        defeq_can_state dcs;
-        simp_lemmas slss;
-        slss = add(tctx, slss, hyp_decl.get_name(), hyp_decl.get_type(), hyp_decl.mk_ref(), LEAN_DEFAULT_PRIORITY);
-        simp_result r = finalize(tctx, get_eq_name(), simplify_fn(tctx, dcs, slss, list<name>(), cfg)(get_eq_name(), goal_type));
-        expr pf;
+        {
+            type_context_old tctx = mk_type_context_for(s);
+            simp_config cfg = get_simp_config();
+            defeq_can_state dcs;
+            simp_lemmas slss;
+            slss = add(tctx, slss, hyp_decl.get_name(), hyp_decl.get_type(), hyp_decl.mk_ref(), LEAN_DEFAULT_PRIORITY);
+            simp_result r = finalize(tctx, get_eq_name(), simplify_fn(tctx, dcs, slss, list<name>(), cfg)(get_eq_name(), goal_type));
+            expr pf;
 
-        if (is_eq(r.get_new(), lhs, rhs)) {
-            lean_verify(tctx.is_def_eq(lhs, rhs));
-            pf = mk_eq_refl(tctx, lhs);
-        } else {
-            lean_verify(is_heq(r.get_new(), lhs, rhs));
-            lean_assert(tctx.is_def_eq(lhs, rhs));
-            pf = mk_heq_refl(tctx, lhs);
+            if (is_eq(r.get_new(), lhs, rhs)) {
+                lean_verify(tctx.is_def_eq(lhs, rhs));
+                pf = mk_eq_refl(tctx, lhs);
+            } else {
+                lean_verify(is_heq(r.get_new(), lhs, rhs));
+                lean_assert(tctx.is_def_eq(lhs, rhs));
+                pf = mk_heq_refl(tctx, lhs);
+            }
+            pf = mk_eq_mpr(tctx, r.get_proof(), pf);
+            s = *apply(tctx, false, false, pf, s);
+            return s;
         }
-        pf = mk_eq_mpr(tctx, r.get_proof(), pf);
-        s = *apply(tctx, false, false, pf, s);
-        return s;
     }
 
     expr prove_pack_injective(name const & pack_inj_name, expr const & pack_inj_type, name const & unpack_name, name const & unpack_pack_name) {
         vm_state vms(m_env, m_opts);
         scope_vm_state vms_scope(vms);
         tactic_state s = intros_and_subst(pack_inj_name, pack_inj_type);
-        type_context tctx = mk_type_context_for(s);
+        type_context_old tctx = mk_type_context_for(s);
         s = *apply(tctx, false, false, mk_constant(get_iff_intro_name()), s);
         s = prove_pack_injective_hard_direction(s, unpack_name, unpack_pack_name);
         s = prove_pack_injective_easy_direction(s);
@@ -2272,27 +2280,35 @@ class add_nested_inductive_decl_fn {
         for (unsigned ind_idx = 0; ind_idx < m_nested_decl.get_num_inds(); ++ind_idx) {
             for (unsigned ir_idx = 0; ir_idx < m_nested_decl.get_num_intro_rules(ind_idx); ++ir_idx) {
                 expr const & ir = m_nested_decl.get_intro_rule(ind_idx, ir_idx);
+                level_param_names lp_names = to_list(m_nested_decl.get_lp_names());
+                name ir_name  = mlocal_name(ir);
+                expr ir_type  = Pi(m_nested_decl.get_params(), mlocal_type(ir));
+                unsigned num_params = m_nested_decl.get_num_params();
                 name inj_name = mk_injective_name(mlocal_name(ir));
-                expr inj_type = mk_injective_type(m_env, mlocal_name(ir), Pi(m_nested_decl.get_params(), mlocal_type(ir)),
-                                                      m_nested_decl.get_num_params(), to_list(m_nested_decl.get_lp_names()));
-
+                expr inj_type = mk_injective_type(m_env, ir_name, ir_type, num_params, lp_names);
                 name inj_arrow_name = mk_injective_arrow_name(mlocal_name(m_inner_decl.get_intro_rule(ind_idx, ir_idx)));
 
                 expr inj_val = prove_nested_injective(inj_type, m_inj_lemmas, inj_arrow_name);
                 m_env = module::add(m_env,
                                     check(m_env,
-                                          mk_definition_inferring_trusted(m_env, inj_name, to_list(m_nested_decl.get_lp_names()), inj_type, inj_val, true)));
-                m_env = mk_injective_arrow(m_env, mlocal_name(ir));
+                                          mk_definition_inferring_trusted(m_env, inj_name, lp_names, inj_type, inj_val, true)));
+                m_env = mk_injective_arrow(m_env, ir_name);
+                if (m_env.find(get_tactic_mk_inj_eq_name())) {
+                    name inj_eq_name  = mk_injective_eq_name(ir_name);
+                    expr inj_eq_type  = mk_injective_eq_type(m_env, ir_name, ir_type, num_params, lp_names);
+                    expr inj_eq_value = prove_injective_eq(m_env, inj_eq_type, inj_eq_name);
+                    m_env = module::add(m_env, check(m_env, mk_definition_inferring_trusted(m_env, inj_eq_name, lp_names, inj_eq_type, inj_eq_value, true)));
+                }
             }
         }
         m_tctx.set_env(m_env);
     }
 
 public:
-    add_nested_inductive_decl_fn(environment const & env, options const & opts,
+    add_nested_inductive_decl_fn(environment const & env, name_generator & ngen, options const & opts,
                                  name_map<implicit_infer_kind> const & implicit_infer_map,
                                  ginductive_decl & nested_decl, bool is_trusted):
-        m_env(env), m_opts(opts), m_implicit_infer_map(implicit_infer_map),
+        m_env(env), m_ngen(ngen), m_opts(opts), m_implicit_infer_map(implicit_infer_map),
         m_nested_decl(nested_decl), m_is_trusted(is_trusted),
         m_inner_decl(m_nested_decl.get_nest_depth() + 1, m_nested_decl.get_lp_names(), m_nested_decl.get_params(),
                      m_nested_decl.get_num_indices(), m_nested_decl.get_ir_offsets()),
@@ -2329,10 +2345,10 @@ public:
     }
 };
 
-optional<environment> add_nested_inductive_decl(environment const & env, options const & opts,
+optional<environment> add_nested_inductive_decl(environment const & env, name_generator & ngen, options const & opts,
                                                 name_map<implicit_infer_kind> const & implicit_infer_map,
                                                 ginductive_decl & decl, bool is_trusted) {
-    return add_nested_inductive_decl_fn(env, opts, implicit_infer_map, decl, is_trusted)();
+    return add_nested_inductive_decl_fn(env, ngen, opts, implicit_infer_map, decl, is_trusted)();
 }
 
 void initialize_inductive_compiler_nested() {

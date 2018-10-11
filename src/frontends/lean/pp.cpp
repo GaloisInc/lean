@@ -76,7 +76,6 @@ static format * g_visible_fmt     = nullptr;
 static format * g_show_fmt        = nullptr;
 static format * g_explicit_fmt    = nullptr;
 static format * g_partial_explicit_fmt    = nullptr;
-static name   * g_tmp_prefix      = nullptr;
 
 class nat_numeral_pp {
     name m_nat;
@@ -124,16 +123,16 @@ bool pp_using_anonymous_constructor(environment const & env, name const & n) {
 }
 
 void initialize_pp() {
-    g_ellipsis_n_fmt  = new format(highlight(format("\u2026")));
+    g_ellipsis_n_fmt  = new format(highlight(format("…")));
     g_ellipsis_fmt    = new format(highlight(format("...")));
     g_placeholder_fmt = new format(highlight(format("_")));
-    g_lambda_n_fmt    = new format(highlight_keyword(format("\u03BB")));
+    g_lambda_n_fmt    = new format(highlight_keyword(format("λ")));
     g_lambda_fmt      = new format(highlight_keyword(format("fun")));
-    g_forall_n_fmt    = new format(highlight_keyword(format("\u2200")));
+    g_forall_n_fmt    = new format(highlight_keyword(format("∀")));
     g_forall_fmt      = new format(highlight_keyword(format("forall")));
     g_pi_n_fmt        = new format(highlight_keyword(format("Π")));
     g_pi_fmt          = new format(highlight_keyword(format("Pi")));
-    g_arrow_n_fmt     = new format(highlight_keyword(format("\u2192")));
+    g_arrow_n_fmt     = new format(highlight_keyword(format("→")));
     g_arrow_fmt       = new format(highlight_keyword(format("->")));
     g_let_fmt         = new format(highlight_keyword(format("let")));
     g_in_fmt          = new format(highlight_keyword(format("in")));
@@ -144,7 +143,6 @@ void initialize_pp() {
     g_show_fmt        = new format(highlight_keyword(format("show")));
     g_explicit_fmt    = new format(highlight_keyword(format("@")));
     g_partial_explicit_fmt    = new format(highlight_keyword(format("@@")));
-    g_tmp_prefix      = new name(name::mk_internal_unique_name());
     g_nat_numeral_pp  = new nat_numeral_pp();
 
     g_pp_using_anonymous_constructor = new name("pp_using_anonymous_constructor");
@@ -184,7 +182,6 @@ void finalize_pp() {
     delete g_show_fmt;
     delete g_partial_explicit_fmt;
     delete g_explicit_fmt;
-    delete g_tmp_prefix;
 }
 
 /** \brief We assume a metavariable name has a suggestion embedded in it WHEN its
@@ -352,6 +349,7 @@ void pretty_fn::set_options_core(options const & _o) {
     m_hide_comp_irrel   = get_pp_hide_comp_irrel(o);
     m_delayed_abstraction  = get_pp_delayed_abstraction(o);
     m_use_holes         = get_pp_use_holes(o);
+    m_annotations       = get_pp_annotations(o);
     m_hide_full_terms   = get_formatter_hide_full_terms(o);
     m_num_nat_coe       = m_numerals;
     m_structure_instances = get_pp_structure_instances(o);
@@ -624,7 +622,7 @@ auto pretty_fn::pp_child(expr const & e, unsigned bp, bool ignore_hide) -> resul
         if (auto r = pp_local_ref(e))
             return add_paren_if_needed(*r, bp);
         if (m_numerals) {
-            if (auto n = to_num(e)) return pp_num(*n);
+            if (auto n = to_num(e)) return pp_num(*n, bp);
         }
         if (m_strings) {
             if (auto r = to_string(e)) return pp_string_literal(*r);
@@ -778,6 +776,7 @@ auto pretty_fn::pp_meta(expr const & e) -> result {
 
 auto pretty_fn::pp_local(expr const & e) -> result {
     name n = sanitize_if_fresh(mlocal_pp_name(e));
+    n = sanitize_name_generator_name(n);
     if (m_locals_full_names)
         return result(format("<") + format(n + mlocal_name(e)) + format(">"));
     else
@@ -857,23 +856,25 @@ auto pretty_fn::pp_structure_instance(expr const & e) -> result {
     }
 }
 
-static bool is_field_notation_candidate(environment const & env, expr const & e, bool implicit) {
+bool pretty_fn::is_field_notation_candidate(expr const & e) {
     expr const & f = get_app_fn(e);
     if (!is_constant(f)) return false;
-    projection_info const * info = get_projection_info(env, const_name(f));
+    projection_info const * info = get_projection_info(m_env, const_name(f));
     if (!info) return false; /* it is not a projection */
     if (get_app_num_args(e) != info->m_nparams + 1) return false;
     /* If implicit arguments is true, and the structure has parameters, we should not
        pretty print using field notation because we will not be able to see the parameters. */
-    if (implicit && info->m_nparams) return false;
+    if (m_implict && info->m_nparams) return false;
+    /* The @ explicitness annotation cannot be combined with field notation, so fail on implicit args */
+    if (m_implict && has_implicit_args(e)) return false;
     name const & S = const_name(f).get_prefix();
     /* We should not use field notation with type classes since the structure is implicit. */
-    if (is_class(env, S)) return false;
+    if (is_class(m_env, S)) return false;
     return true;
 }
 
 auto pretty_fn::pp_field_notation(expr const & e) -> result {
-    lean_assert(is_field_notation_candidate(m_env, e, m_implict));
+    lean_assert(is_field_notation_candidate(e));
     buffer<expr> args;
     expr const & f   = get_app_args(e, args);
     bool ignore_hide = true;
@@ -889,7 +890,7 @@ auto pretty_fn::pp_app(expr const & e) -> result {
     expr const & fn = app_fn(e);
     if (m_structure_instances && is_structure_instance(m_env, e, m_implict))
         return pp_structure_instance(e);
-    if (m_structure_projections && is_field_notation_candidate(m_env, e, m_implict))
+    if (m_structure_projections && is_field_notation_candidate(e))
         return pp_field_notation(e);
     // If the application contains a metavariable, then we want to
     // show the function, otherwise it would be hard to understand the
@@ -1171,6 +1172,10 @@ auto pretty_fn::pp_macro(expr const & e) -> result {
     } else if (is_inaccessible(e)) {
         format r = format(".") + pp_child(get_annotation_arg(e), max_bp()).fmt();
         return result(r);
+    } else if (is_as_pattern(e)) {
+        auto lhs_fmt = pp_child(get_as_pattern_lhs(e), max_bp()).fmt();
+        auto rhs_fmt = pp_child(get_as_pattern_rhs(e), max_bp()).fmt();
+        return result(lhs_fmt + format("@") + rhs_fmt);
     } else if (is_pattern_hint(e)) {
         return result(group(nest(2, format("(:") + pp(get_pattern_hint_arg(e)).fmt() + format(":)"))));
     } else if (is_marked_as_comp_irrelevant(e)) {
@@ -1187,7 +1192,10 @@ auto pretty_fn::pp_macro(expr const & e) -> result {
         else
             return pp_macro_default(e);
     } else if (is_annotation(e)) {
-        return pp(get_annotation_arg(e));
+        if (m_annotations)
+            return format("[") + format(get_annotation_kind(e)) + space() + pp(get_annotation_arg(e)).fmt() + format("]");
+        else
+            return pp(get_annotation_arg(e));
     } else if (is_rec_fn_macro(e)) {
         return format("[") + format(get_rec_fn_name(e)) + format("]");
     } else if (is_synthetic_sorry(e)) {
@@ -1241,7 +1249,13 @@ auto pretty_fn::pp_let(expr e) -> result {
     return result(0, r);
 }
 
-auto pretty_fn::pp_num(mpz const & n) -> result {
+auto pretty_fn::pp_num(mpz const & n, unsigned bp) -> result {
+    if (n.is_neg()) {
+        auto prec = get_expr_precedence(m_token_table, "-");
+        if (!prec || bp > *prec) {
+            return result(paren(format(n.to_string())));
+        }
+    }
     return result(format(n.to_string()));
 }
 
@@ -1368,10 +1382,10 @@ static unsigned get_some_precedence(token_table const & t, name const & tk) {
     return 0;
 }
 
-auto pretty_fn::pp_notation_child(expr const & e, unsigned lbp, unsigned rbp) -> result {
+auto pretty_fn::pp_notation_child(expr const & e, unsigned rbp, unsigned lbp) -> result {
     if (is_app(e)) {
         if (m_numerals) {
-            if (auto n = to_num(e)) return pp_num(*n);
+            if (auto n = to_num(e)) return pp_num(*n, lbp);
         }
         if (m_strings) {
             if (auto r = to_string(e)) return pp_string_literal(*r);
@@ -1379,7 +1393,7 @@ auto pretty_fn::pp_notation_child(expr const & e, unsigned lbp, unsigned rbp) ->
         }
         expr const & f = app_fn(e);
         if (is_implicit(f)) {
-            return pp_notation_child(f, lbp, rbp);
+            return pp_notation_child(f, rbp, lbp);
         } else if (!m_coercion && is_coercion(e)) {
             return pp_hide_coercion(e, rbp);
         } else if (!m_coercion && is_coercion_fn(e)) {
@@ -1387,10 +1401,13 @@ auto pretty_fn::pp_notation_child(expr const & e, unsigned lbp, unsigned rbp) ->
         }
     }
     result r = pp(e);
-    if (r.rbp() < lbp || r.lbp() <= rbp) {
-        return result(paren(r.fmt()));
-    } else {
+    /* see invariants of `pretty_fn::result`: Check that the surrounding notation would parse at least r
+     * by the first invariant, and at most r (instead of the following token with binding power lbp) by the
+     * second invariant. */
+    if (rbp < r.lbp() && r.rbp() >= lbp) {
         return r;
+    } else {
+        return result(paren(r.fmt()));
     }
 }
 
@@ -1426,7 +1443,9 @@ auto pretty_fn::pp_notation(notation_entry const & entry, buffer<optional<expr>>
         to_buffer(entry.get_transitions(), ts);
         format fmt;
         unsigned i         = ts.size();
+        // bp of the last action
         unsigned last_rbp  = inf_bp()-1;
+        // bp of the token immediately to the right of the action
         unsigned token_lbp = 0;
         bool last          = true;
         while (i > 0) {
@@ -1439,6 +1458,7 @@ auto pretty_fn::pp_notation(notation_entry const & entry, buffer<optional<expr>>
             case notation::action_kind::Skip:
                 curr = tk_fmt;
                 if (last)
+                    // invariant fulfilled: Skip action will never parse a trailing token
                     last_rbp = inf_bp();
                 break;
             case notation::action_kind::Expr:
@@ -1447,10 +1467,15 @@ auto pretty_fn::pp_notation(notation_entry const & entry, buffer<optional<expr>>
                 } else {
                     expr e = *args.back();
                     args.pop_back();
-                    result e_r   = pp_notation_child(e, token_lbp, a.rbp());
+                    result e_r   = pp_notation_child(e, a.rbp(), token_lbp);
                     curr = tk_fmt + e_r.fmt();
                     if (last)
-                        last_rbp = a.rbp();
+                        /* last_rbp can be no more than `a.rbp()`, since this is the bp used during parsing.
+                         * However, `e_r.rbp()` may actually be smaller since it may be missing parentheses
+                         * compared to the original input. For example, when re-printing `x >>= (fun y, z) = ...`,
+                         * `e_r.fmt()` will be `fun y, z`. If we used the rbp of the `>>=` instead of
+                         * `e_r.rbp()` (0), we would get the wrong output `x >>= fun y, z = ...`. */
+                        last_rbp = std::min(a.rbp(), e_r.rbp());
                     break;
                 }
             case notation::action_kind::Exprs:
@@ -1500,7 +1525,7 @@ auto pretty_fn::pp_notation(notation_entry const & entry, buffer<optional<expr>>
                     unsigned sep_lbp = get_some_precedence(m_token_table, a.get_sep());
                     while (j > 0) {
                         --j;
-                        result arg_res = pp_notation_child(rec_args[j], curr_lbp, a.rbp());
+                        result arg_res = pp_notation_child(rec_args[j], a.rbp(), curr_lbp);
                         if (j == 0) {
                             curr = tk_fmt + arg_res.fmt() + curr;
                         } else {
@@ -1551,10 +1576,11 @@ auto pretty_fn::pp_notation(notation_entry const & entry, buffer<optional<expr>>
                     }
                     if (locals.empty())
                         return optional<result>();
-                    result e_r   = pp_notation_child(e, token_lbp, a.rbp());
+                    result e_r   = pp_notation_child(e, a.rbp(), token_lbp);
                     curr = tk_fmt + e_r.fmt();
                     if (last)
-                        last_rbp = a.rbp();
+                        // see Expr action
+                        last_rbp = std::min(a.rbp(), e_r.rbp());
                     break;
                 }
             case notation::action_kind::Ext:
@@ -1576,7 +1602,7 @@ auto pretty_fn::pp_notation(notation_entry const & entry, buffer<optional<expr>>
                 return optional<result>();
             expr e = *args.back();
             args.pop_back();
-            format e_fmt = pp_notation_child(e, token_lbp, 0).fmt();
+            format e_fmt = pp_notation_child(e, 0, token_lbp).fmt();
             fmt = e_fmt + fmt;
         }
         return optional<result>(result(first_lbp, last_rbp, group(nest(m_indent, fmt))));
@@ -1747,7 +1773,7 @@ auto pretty_fn::pp(expr const & e, bool ignore_hide) -> result {
     m_num_steps++;
 
     if (m_numerals) {
-        if (auto n = to_num(e)) return pp_num(*n);
+        if (auto n = to_num(e)) return pp_num(*n, 0);
     }
     if (m_strings) {
         if (auto r = to_string(e))      return pp_string_literal(*r);
@@ -1842,7 +1868,7 @@ std::string sexpr_to_string(sexpr const & s) {
 // check whether a space must be inserted between the strings so that lexing them would
 // produce separate tokens
 std::pair<bool, token_table const *> pretty_fn::needs_space_sep(token_table const * last, std::string const & s1, std::string const & s2) const {
-    if (s1.size() == 0 || (is_id_rest(get_utf8_last_char(s1.data()), s1.data() + s1.size()) && is_id_rest(s2.data(), s2.data() + s2.size())))
+    if (s1.empty() || (is_id_rest(get_utf8_last_char(s1.data()), s1.data() + s1.size()) && is_id_rest(s2.data(), s2.data() + s2.size())))
         return mk_pair(true, nullptr); // would be lexed as a single identifier without space
 
     if (last) {

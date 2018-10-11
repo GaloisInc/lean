@@ -5,14 +5,25 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Leonardo de Moura
 */
 #pragma once
+#include <string>
 #include "kernel/environment.h"
+#include "library/expr_pair.h"
 
 namespace lean {
+/* If \c n is not in \c env, then return \c. Otherwise, find the first j >= idx s.t.
+   n.append_after(j) is not in \c env. */
+name mk_unused_name(environment const & env, name const & n, unsigned & idx);
+
+/* If \c n is not in \c env, then return \c. Otherwise, find the first j >= 1 s.t.
+   n.append_after(j) is not in \c env. */
+name mk_unused_name(environment const & env, name const & n);
+
 /** \brief Return the "arity" of the given type. The arity is the number of nested pi-expressions. */
 unsigned get_arity(expr type);
 
-/** \brief Return true if it is a lean internal name, i.e., the name starts with a `_` */
-bool is_internal_name(name const & n);
+optional<expr> is_optional_param(expr const & e);
+
+optional<expr_pair> is_auto_param(expr const & e);
 
 /** \brief Return the universe level of the type of \c A.
     Throws an exception if the (relaxed) whnf of the type
@@ -32,8 +43,8 @@ bool is_app_of(expr const & t, name const & f_name);
 /** \brief Return true iff t is a constant named f_name or an application of the form (f_name a_1 ... a_nargs) */
 bool is_app_of(expr const & t, name const & f_name, unsigned nargs);
 
-/** \brief If type is of the form (opt_param A v), return A. Otherwise, return type. */
-expr consume_opt_param(expr const & type);
+/** \brief If type is of the form (auto_param A p) or (opt_param A v), return A. Otherwise, return type. */
+expr consume_auto_opt_param(expr const & type);
 
 /** \brief Unfold constant \c e or constant application (i.e., \c e is of the form (f ....),
     where \c f is a constant */
@@ -302,6 +313,22 @@ name get_dep_recursor(environment const & env, name const & n);
 /** Given an inductive datatype named \c n, return a cases_on recursor \c n that supports dependent elimination
     even if \c n is an inductive predicate. */
 name get_dep_cases_on(environment const & env, name const & n);
+
+/** We generate auxiliary meta definitions for regular recursive definitions.
+    The auxiliary meta definition has a clear runtime cost execution model, and
+    we use it in the VM. This function returns an auxiliary meta definition for the given name. */
+name mk_aux_meta_rec_name(name const & n);
+
+/** Return some(n') if \c n is a name created using mk_aux_meta_rec_name(n') */
+optional<name> is_aux_meta_rec_name(name const & n);
+
+/** Convert an expression representing a `name` literal into a `name` object. */
+optional<name> name_lit_to_name(expr const & name_lit);
+
+/** Return (tactic unit) type */
+expr mk_tactic_unit();
+
+std::string const & get_version_string();
 
 void initialize_library_util();
 void finalize_library_util();

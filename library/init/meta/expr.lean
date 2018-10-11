@@ -6,7 +6,7 @@ Authors: Leonardo de Moura
 prelude
 import init.meta.level init.category.monad init.meta.rb_map
 universes u v
-
+open native
 structure pos :=
 (line   : nat)
 (column : nat)
@@ -89,11 +89,6 @@ meta constant expr.hash : expr → nat
 meta constant expr.lt : expr → expr → bool
 /-- Compares expressions, ignoring binder names. -/
 meta constant expr.lex_lt : expr → expr → bool
-/-- Compares expressions, ignoring binder names, and sorting by hash. -/
-meta def expr.cmp (a b : expr) : ordering :=
-if expr.lt a b then ordering.lt
-else if a =ₐ b then ordering.eq
-else ordering.gt
 
 meta constant expr.fold {α : Type} : expr → α → (expr → nat → α → α) → α
 meta constant expr.replace : expr → (expr → nat → option expr) → expr
@@ -141,7 +136,7 @@ meta constant expr.has_local_in : expr → name_set → bool
 
     The quotation expression `(a) (outside of patterns) is equivalent to `reflect a`
     and thus can be used as an explicit way of inferring an instance of `reflected a`. -/
-meta def reflected {α : Sort u} : α → Type :=
+@[class] meta def reflected {α : Sort u} : α → Type :=
 λ _, expr
 
 @[inline] meta def reflected.to_expr {α : Sort u} {a : α} : reflected a → expr :=
@@ -149,19 +144,20 @@ id
 
 @[inline] meta def reflected.subst {α : Sort v} {β : α → Sort u} {f : Π a : α, β a} {a : α} :
   reflected f → reflected a → reflected (f a) :=
-expr.subst
+λ ef ea, match ef with
+| (expr.lam _ _ _ _) := expr.subst ef ea
+| _                  := expr.app   ef ea
+end
 
-meta constant expr.reflect (e : expr elab) : reflected e
-meta constant string.reflect (s : string) : reflected s
-
-attribute [class] reflected
-attribute [instance] expr.reflect string.reflect
 attribute [irreducible] reflected reflected.subst reflected.to_expr
+
+@[instance] protected meta constant expr.reflect (e : expr elab) : reflected e
+@[instance] protected meta constant string.reflect (s : string) : reflected s
 
 @[inline] meta instance {α : Sort u} (a : α) : has_coe (reflected a) expr :=
 ⟨reflected.to_expr⟩
 
-meta def reflect {α : Sort u} (a : α) [h : reflected a] : reflected a := h
+protected meta def reflect {α : Sort u} (a : α) [h : reflected a] : reflected a := h
 
 meta instance {α} (a : α) : has_to_format (reflected a) :=
 ⟨λ h, to_fmt h.to_expr⟩
@@ -169,9 +165,15 @@ meta instance {α} (a : α) : has_to_format (reflected a) :=
 namespace expr
 open decidable
 
+meta def expr.lt_prop (a b : expr) : Prop :=
+expr.lt a b = tt
+
+meta instance : decidable_rel expr.lt_prop :=
+λ a b, bool.decidable_eq _ _
+
 /-- Compares expressions, ignoring binder names, and sorting by hash. -/
-meta instance : has_ordering expr :=
-⟨ expr.cmp ⟩
+meta instance : has_lt expr :=
+⟨ expr.lt_prop ⟩
 
 meta def mk_true : expr :=
 const `true []
@@ -229,6 +231,15 @@ meta def mk_app : expr → list expr → expr
 | e []      := e
 | e (x::xs) := mk_app (e x) xs
 
+meta def mk_binding (ctor : name → binder_info → expr → expr → expr) (e : expr) : Π (l : expr), expr
+| (local_const n pp_n bi ty) := ctor pp_n bi ty (e.abstract_local n)
+| _                          := e
+
+/-- (bind_pi e l) abstracts and pi-binds the local `l` in `e` -/
+meta def bind_pi := mk_binding pi
+/-- (bind_lambda e l) abstracts and lambda-binds the local `l` in `e` -/
+meta def bind_lambda := mk_binding lam
+
 meta def ith_arg_aux : expr → nat → expr
 | (app f a) 0     := a
 | (app f a) (n+1) := ith_arg_aux f n
@@ -265,7 +276,7 @@ meta def is_aux_decl : expr → bool
 | (local_const _ _ binder_info.aux_decl _) := tt
 | _                                        := ff
 
-meta def is_constant_of : expr → name → bool
+meta def is_constant_of : expr elab → name → bool
 | (const n₁ ls) n₂ := n₁ = n₂
 | e             n  := ff
 
@@ -325,6 +336,10 @@ meta def is_heq : expr → option (expr × expr × expr × expr)
 | `(@heq %%α %%a %%β %%b) := some (α, a, β, b)
 | _                       := none
 
+meta def is_lambda : expr → bool
+| (lam _ _ _ _) := tt
+| e             := ff
+
 meta def is_pi : expr → bool
 | (pi _ _ _ _) := tt
 | e            := ff
@@ -357,6 +372,10 @@ meta def binding_body : expr → expr
 | (lam _ _ _ b) := b
 | e             := e
 
+meta def is_macro : expr → bool
+| (macro d a) := tt
+| e           := ff
+
 meta def is_numeral : expr → bool
 | `(@has_zero.zero %%α %%s)  := tt
 | `(@has_one.one %%α %%s)    := tt
@@ -376,6 +395,11 @@ meta def pis : list expr → expr → expr
 | (local_const uniq pp info t :: es) f :=
   pi pp info t (abstract_local (pis es f) uniq)
 | _ f := f
+
+meta def extract_opt_auto_param : expr → expr
+| `(@opt_param %%t _)  := extract_opt_auto_param t
+| `(@auto_param %%t _) := extract_opt_auto_param t
+| e                    := e
 
 open format
 
@@ -400,7 +424,7 @@ end expr
 
 @[reducible] meta def expr_map (data : Type) := rb_map expr data
 namespace expr_map
-export rb_map (hiding mk)
+export native.rb_map (hiding mk)
 
 meta def mk (data : Type) : expr_map data := rb_map.mk expr data
 end expr_map

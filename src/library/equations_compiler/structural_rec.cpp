@@ -19,16 +19,17 @@ Author: Leonardo de Moura
 #include "library/equations_compiler/util.h"
 #include "library/equations_compiler/structural_rec.h"
 #include "library/equations_compiler/elim_match.h"
+#include "frontends/lean/elaborator.h"
 
 namespace lean {
-#define trace_struct(Code) lean_trace(name({"eqn_compiler", "structural_rec"}), type_context ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
+#define trace_struct(Code) lean_trace(name({"eqn_compiler", "structural_rec"}), type_context_old ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
 #define trace_struct_aux(Code) lean_trace(name({"eqn_compiler", "structural_rec"}), scope_trace_env _scope1(m_ctx.env(), m_ctx); Code)
-#define trace_debug_struct(Code) lean_trace(name({"debug", "eqn_compiler", "structural_rec"}), type_context ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
+#define trace_debug_struct(Code) lean_trace(name({"debug", "eqn_compiler", "structural_rec"}), type_context_old ctx = mk_type_context(); scope_trace_env _scope1(m_env, ctx); Code)
 #define trace_debug_struct_aux(Code) lean_trace(name({"debug", "eqn_compiler", "structural_rec"}), scope_trace_env _scope1(m_ctx.env(), m_ctx); Code)
 
 struct structural_rec_fn {
     environment      m_env;
-    options          m_opts;
+    elaborator &     m_elab;
     metavar_context  m_mctx;
     local_context    m_lctx;
 
@@ -42,9 +43,9 @@ struct structural_rec_fn {
     buffer<unsigned> m_indices_pos;
     expr             m_motive_type;
 
-    structural_rec_fn(environment const & env, options const & opts,
+    structural_rec_fn(environment const & env, elaborator & elab,
                       metavar_context const & mctx, local_context const & lctx):
-        m_env(env), m_opts(opts), m_mctx(mctx), m_lctx(lctx) {
+        m_env(env), m_elab(elab), m_mctx(mctx), m_lctx(lctx) {
     }
 
     [[ noreturn ]] void throw_error(char const * msg) {
@@ -55,8 +56,8 @@ struct structural_rec_fn {
         throw generic_exception(m_ref, strm);
     }
 
-    type_context mk_type_context() {
-        return type_context(m_env, m_opts, m_mctx, m_lctx, transparency_mode::Semireducible);
+    type_context_old mk_type_context() {
+        return type_context_old(m_env, m_mctx, m_lctx, m_elab.get_cache(), transparency_mode::Semireducible);
     }
 
     environment const & env() const { return m_env; }
@@ -65,13 +66,13 @@ struct structural_rec_fn {
     /** \brief Auxiliary object for checking whether recursive application are
         structurally smaller or not */
     struct check_rhs_fn {
-        type_context & m_ctx;
+        type_context_old & m_ctx;
         expr           m_lhs;
         expr           m_fn;
         expr           m_pattern;
         unsigned       m_arg_idx;
 
-        check_rhs_fn(type_context & ctx, expr const & lhs, expr const & fn, expr const & pattern, unsigned arg_idx):
+        check_rhs_fn(type_context_old & ctx, expr const & lhs, expr const & fn, expr const & pattern, unsigned arg_idx):
             m_ctx(ctx), m_lhs(lhs), m_fn(fn), m_pattern(pattern), m_arg_idx(arg_idx) {}
 
         bool is_constructor(expr const & e) const {
@@ -159,7 +160,7 @@ struct structural_rec_fn {
                 if (!check_rhs(let_value(e))) {
                     return false;
                 } else {
-                    type_context::tmp_locals locals(m_ctx);
+                    type_context_old::tmp_locals locals(m_ctx);
                     return check_rhs(instantiate(let_body(e), locals.push_local_from_let(e)));
                 }
             case expr_kind::Lambda:
@@ -167,7 +168,7 @@ struct structural_rec_fn {
                 if (!check_rhs(binding_domain(e))) {
                     return false;
                 } else {
-                    type_context::tmp_locals locals(m_ctx);
+                    type_context_old::tmp_locals locals(m_ctx);
                     return check_rhs(instantiate(binding_body(e), locals.push_local_from_binding(e)));
                 }
             }
@@ -179,19 +180,19 @@ struct structural_rec_fn {
         }
     };
 
-    bool check_rhs(type_context & ctx, expr const & lhs, expr const & fn, expr pattern, unsigned arg_idx, expr const & rhs) {
+    bool check_rhs(type_context_old & ctx, expr const & lhs, expr const & fn, expr pattern, unsigned arg_idx, expr const & rhs) {
         pattern = ctx.whnf(pattern);
         return check_rhs_fn(ctx, lhs, fn, pattern, arg_idx)(rhs);
     }
 
-    bool check_eq(type_context & ctx, expr const & eqn, unsigned arg_idx) {
+    bool check_eq(type_context_old & ctx, expr const & eqn, unsigned arg_idx) {
         unpack_eqn ue(ctx, eqn);
         buffer<expr> args;
         expr const & fn  = get_app_args(ue.lhs(), args);
         return check_rhs(ctx, ue.lhs(), fn, args[arg_idx], arg_idx, ue.rhs());
     }
 
-    static bool depends_on_locals(expr const & e, type_context::tmp_locals const & locals) {
+    static bool depends_on_locals(expr const & e, type_context_old::tmp_locals const & locals) {
         return depends_on_any(e, locals.as_buffer().size(), locals.as_buffer().data());
     }
 
@@ -199,9 +200,9 @@ struct structural_rec_fn {
        If the argument type is an indexed family, we store the position of the
        indices (in the function being defined) at m_indices_pos.
        This method also updates m_reflexive (true iff the inductive datatype is reflexive). */
-    bool check_arg_type(type_context & ctx, unpack_eqns const & ues, unsigned arg_idx) {
+    bool check_arg_type(type_context_old & ctx, unpack_eqns const & ues, unsigned arg_idx) {
         m_indices_pos.clear();
-        type_context::tmp_locals locals(ctx);
+        type_context_old::tmp_locals locals(ctx);
         /* We can only use structural recursion on arg_idx IF
            1- Type is an inductive datatype with support for the brec_on construction.
            2- Type parameters do not depend on other arguments of the function being defined. */
@@ -310,7 +311,7 @@ struct structural_rec_fn {
        If the result is true, then m_arg_pos will contain the position of the argument,
        and m_indices_pos the position of its indices (when the type of the
        argument is an indexed family). */
-    bool find_rec_arg(type_context & ctx, unpack_eqns const & ues) {
+    bool find_rec_arg(type_context_old & ctx, unpack_eqns const & ues) {
         buffer<expr> const & eqns = ues.get_eqns_of(0);
         unsigned arity = ues.get_arity_of(0);
         for (unsigned i = 0; i < arity; i++) {
@@ -333,8 +334,8 @@ struct structural_rec_fn {
 
     /* Return the type of the new function.
        It also sets the m_motive_type field. */
-    expr mk_new_fn_motive_types(type_context & ctx, unpack_eqns const & ues) {
-        type_context::tmp_locals locals(ctx);
+    expr mk_new_fn_motive_types(type_context_old & ctx, unpack_eqns const & ues) {
+        type_context_old::tmp_locals locals(ctx);
         expr fn        = ues.get_fn(0);
         expr fn_type   = ctx.infer(fn);
         unsigned arity = ues.get_arity_of(0);
@@ -418,7 +419,7 @@ struct structural_rec_fn {
         expr                     m_F;
         expr                     m_C;
 
-        elim_rec_apps_fn(type_context & ctx, expr const & fn,
+        elim_rec_apps_fn(type_context_old & ctx, expr const & fn,
                          unsigned arg_pos, buffer<unsigned> const & indices_pos, expr const & F, expr const & C):
             replace_visitor_with_tc(ctx),
             m_fn(fn), m_arg_pos(arg_pos), m_indices_pos(indices_pos), m_F(F), m_C(C) {}
@@ -521,7 +522,7 @@ struct structural_rec_fn {
        2) W have an equation (second) where the recursive argument is a variable
           (flag incomplete).
     */
-    bool must_complete_rec_arg(type_context & ctx, unpack_eqns const & ues) {
+    bool must_complete_rec_arg(type_context_old & ctx, unpack_eqns const & ues) {
         if (m_arg_pos == 0) return false;
         buffer<expr> const & eqns = ues.get_eqns_of(0);
         bool has_case_analysis_before = false;
@@ -549,10 +550,10 @@ struct structural_rec_fn {
         return false;
     }
 
-    void update_eqs(type_context & ctx, unpack_eqns & ues, expr const & fn, expr const & new_fn) {
+    void update_eqs(type_context_old & ctx, unpack_eqns & ues, expr const & fn, expr const & new_fn) {
         /* C is a temporary "abstract" motive, we use it to access the "brec_on dictionary".
            The "brec_on dictionary is an element of type below, and it is the last argument of the new function. */
-        expr C = mk_local(mk_fresh_name(), "_C", m_motive_type, binder_info());
+        expr C = mk_local(ctx.next_name(), "_C", m_motive_type, binder_info());
         buffer<expr> & eqns = ues.get_eqns_of(0);
         buffer<expr> new_eqns;
         bool complete = must_complete_rec_arg(ctx, ues);
@@ -578,7 +579,7 @@ struct structural_rec_fn {
                    expr new_lhs = mk_app(new_fn, new_lhs_args);
                    expr type    = ctx.whnf(ctx.infer(new_lhs));
                    lean_assert(is_pi(type));
-                   type_context::tmp_locals extra(ctx);
+                   type_context_old::tmp_locals extra(ctx);
                    expr F       = extra.push_local(binding_name(type), binding_domain(type));
                    new_vars.push_back(F);
                    new_lhs      = mk_app(new_lhs, F);
@@ -605,7 +606,7 @@ struct structural_rec_fn {
     }
 
     optional<expr> elim_recursion(expr const & e) {
-        type_context ctx = mk_type_context();
+        type_context_old ctx = mk_type_context();
         unpack_eqns ues(ctx, e);
         if (ues.get_num_fns() != 1) {
             trace_struct(tout() << "structural recursion is not supported for mutually recursive functions:";
@@ -639,7 +640,7 @@ struct structural_rec_fn {
         return some_expr(new_eqns);
     }
 
-    expr whnf_upto_below(type_context & ctx, name const & I_name, expr const & below_type) {
+    expr whnf_upto_below(type_context_old & ctx, name const & I_name, expr const & below_type) {
         name below_name(I_name, "below");
         name ibelow_name(I_name, "ibelow");
         return ctx.whnf_head_pred(below_type, [&](expr const & e) {
@@ -653,8 +654,8 @@ struct structural_rec_fn {
     }
 
     expr mk_function(expr const & aux_fn) {
-        type_context ctx = mk_type_context();
-        type_context::tmp_locals locals(ctx);
+        type_context_old ctx = mk_type_context();
+        type_context_old::tmp_locals locals(ctx);
         buffer<expr> fn_args;
         expr aux_fn_type = ctx.infer(aux_fn);
         for (unsigned i = 0; i < m_arity + 1 /* below argument */; i++) {
@@ -707,8 +708,10 @@ struct structural_rec_fn {
             return new_fn;
         } else {
             expr r;
-            std::tie(m_env, r) = mk_aux_definition(m_env, m_opts, m_mctx, m_lctx, m_header,
-                                                   head(m_header.m_fn_names), m_fn_type, new_fn);
+            std::tie(m_env, r) = mk_aux_definition(m_env, m_elab.get_options(), m_mctx, m_lctx, m_header,
+                                                   head(m_header.m_fn_names),
+                                                   head(m_header.m_fn_actual_names),
+                                                   m_fn_type, new_fn);
             return r;
         }
     }
@@ -720,7 +723,7 @@ struct structural_rec_fn {
         unsigned                 m_arg_pos;
         buffer<unsigned> const & m_indices_pos;
     public:
-        mk_lemma_rhs_fn(type_context & ctx, expr const & fn, expr const & F, expr const & rec_arg,
+        mk_lemma_rhs_fn(type_context_old & ctx, expr const & fn, expr const & F, expr const & rec_arg,
                         unsigned arg_pos, buffer<unsigned> const & indices_pos):
             replace_visitor_with_tc(ctx), m_fn(fn), m_F(F), m_lhs_rec_arg(rec_arg),
             m_arg_pos(arg_pos), m_indices_pos(indices_pos) {}
@@ -921,16 +924,15 @@ struct structural_rec_fn {
         }
     };
 
-    expr mk_lemma_rhs(type_context & ctx, expr const & fn, expr const & F, expr const & rec_arg, expr const & rhs) {
+    expr mk_lemma_rhs(type_context_old & ctx, expr const & fn, expr const & F, expr const & rec_arg, expr const & rhs) {
         return mk_lemma_rhs_fn(ctx, fn, F, rec_arg, m_arg_pos, m_indices_pos)(rhs);
     }
 
     void mk_lemmas(expr const & fn, list<expr> const & lemmas) {
-        name const & fn_name = const_name(get_app_fn(fn));
         unsigned eqn_idx     = 1;
-        type_context ctx     = mk_type_context();
+        type_context_old ctx     = mk_type_context();
         for (expr type : lemmas) {
-            type_context::tmp_locals locals(ctx);
+            type_context_old::tmp_locals locals(ctx);
             type = ctx.relaxed_whnf(type);
             while (is_pi(type)) {
                 expr local = locals.push_local_from_binding(type);
@@ -951,18 +953,20 @@ struct structural_rec_fn {
                 if (local != F)
                     new_locals.push_back(local);
             }
-            m_env = mk_equation_lemma(m_env, m_opts, m_mctx, ctx.lctx(), fn_name,
+            name const & fn_name        = head(m_header.m_fn_names);
+            name const & fn_actual_name = head(m_header.m_fn_actual_names);
+            m_env = mk_equation_lemma(m_env, m_elab.get_options(), m_mctx, ctx.lctx(), fn_name, fn_actual_name,
                                       eqn_idx, m_header.m_is_private, new_locals, new_lhs, new_rhs);
             eqn_idx++;
         }
     }
 
-    optional<eqn_compiler_result> operator()(expr const & eqns, elaborator & elab) {
+    optional<eqn_compiler_result> operator()(expr const & eqns) {
         m_ref    = eqns;
         m_header = get_equations_header(eqns);
         auto new_eqns = elim_recursion(eqns);
         if (!new_eqns) return {};
-        elim_match_result R = elim_match(m_env, m_opts, m_mctx, m_lctx, *new_eqns, elab);
+        elim_match_result R = elim_match(m_env, m_elab, m_mctx, m_lctx, *new_eqns);
         expr fn = mk_function(R.m_fn);
         if (m_header.m_aux_lemmas) {
             lean_assert(!m_header.m_is_meta);
@@ -976,10 +980,10 @@ struct structural_rec_fn {
     }
 };
 
-optional<eqn_compiler_result> try_structural_rec(environment & env, options const & opts, metavar_context & mctx,
-                                  local_context const & lctx, expr const & eqns, elaborator & elab) {
-    structural_rec_fn F(env, opts, mctx, lctx);
-    if (auto r = F(eqns, elab)) {
+optional<eqn_compiler_result> try_structural_rec(environment & env, elaborator & elab, metavar_context & mctx,
+                                                 local_context const & lctx, expr const & eqns) {
+    structural_rec_fn F(env, elab, mctx, lctx);
+    if (auto r = F(eqns)) {
         env  = F.env();
         mctx = F.mctx();
         return r;

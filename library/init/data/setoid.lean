@@ -10,12 +10,11 @@ universes u
 class setoid (α : Sort u) :=
 (r : α → α → Prop) (iseqv : equivalence r)
 
-namespace setoid
-infix ` ≈ ` := setoid.r
+instance setoid_has_equiv {α : Sort u} [setoid α] : has_equiv α :=
+⟨setoid.r⟩
 
-variable {α : Sort u}
-variable [s : setoid α]
-include s
+namespace setoid
+variables {α : Sort u} [setoid α]
 
 @[refl] lemma refl (a : α) : a ≈ a :=
 match setoid.iseqv α with

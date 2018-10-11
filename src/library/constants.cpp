@@ -3,7 +3,6 @@
 // DO NOT EDIT, automatically generated file, generator scripts/gen_constants_cpp.py
 #include "util/name.h"
 namespace lean{
-name const * g_abs = nullptr;
 name const * g_absurd = nullptr;
 name const * g_acc_cases_on = nullptr;
 name const * g_acc_rec = nullptr;
@@ -27,14 +26,15 @@ name const * g_bool = nullptr;
 name const * g_bool_ff = nullptr;
 name const * g_bool_tt = nullptr;
 name const * g_combinator_K = nullptr;
-name const * g_caching_user_attribute = nullptr;
 name const * g_cast = nullptr;
 name const * g_cast_heq = nullptr;
 name const * g_char = nullptr;
+name const * g_char_mk = nullptr;
+name const * g_char_ne_of_vne = nullptr;
 name const * g_char_of_nat = nullptr;
 name const * g_char_of_nat_ne_of_ne = nullptr;
-name const * g_classical_prop_decidable = nullptr;
-name const * g_classical_type_decidable_eq = nullptr;
+name const * g_is_valid_char_range_1 = nullptr;
+name const * g_is_valid_char_range_2 = nullptr;
 name const * g_coe = nullptr;
 name const * g_coe_fn = nullptr;
 name const * g_coe_sort = nullptr;
@@ -46,7 +46,6 @@ name const * g_decidable = nullptr;
 name const * g_decidable_to_bool = nullptr;
 name const * g_distrib = nullptr;
 name const * g_dite = nullptr;
-name const * g_id = nullptr;
 name const * g_empty = nullptr;
 name const * g_Exists = nullptr;
 name const * g_eq = nullptr;
@@ -79,18 +78,14 @@ name const * g_forall_congr = nullptr;
 name const * g_forall_congr_eq = nullptr;
 name const * g_forall_not_of_not_exists = nullptr;
 name const * g_funext = nullptr;
-name const * g_ge = nullptr;
-name const * g_gt = nullptr;
 name const * g_has_add = nullptr;
 name const * g_has_add_add = nullptr;
-name const * g_andthen = nullptr;
+name const * g_has_andthen_andthen = nullptr;
 name const * g_has_bind_and_then = nullptr;
-name const * g_has_bind_bind = nullptr;
 name const * g_has_bind_seq = nullptr;
 name const * g_has_div = nullptr;
 name const * g_has_div_div = nullptr;
 name const * g_has_emptyc_emptyc = nullptr;
-name const * g_has_mod_mod = nullptr;
 name const * g_has_mul = nullptr;
 name const * g_has_mul_mul = nullptr;
 name const * g_has_insert_insert = nullptr;
@@ -124,8 +119,9 @@ name const * g_heq_symm = nullptr;
 name const * g_heq_trans = nullptr;
 name const * g_heq_of_eq = nullptr;
 name const * g_hole_command = nullptr;
-name const * g_id_locked = nullptr;
+name const * g_id = nullptr;
 name const * g_id_rhs = nullptr;
+name const * g_id_delta = nullptr;
 name const * g_if_neg = nullptr;
 name const * g_if_pos = nullptr;
 name const * g_iff = nullptr;
@@ -145,14 +141,6 @@ name const * g_implies = nullptr;
 name const * g_implies_of_if_neg = nullptr;
 name const * g_implies_of_if_pos = nullptr;
 name const * g_int = nullptr;
-name const * g_int_has_add = nullptr;
-name const * g_int_has_mul = nullptr;
-name const * g_int_has_sub = nullptr;
-name const * g_int_has_div = nullptr;
-name const * g_int_has_le = nullptr;
-name const * g_int_has_lt = nullptr;
-name const * g_int_has_neg = nullptr;
-name const * g_int_has_mod = nullptr;
 name const * g_int_bit0_nonneg = nullptr;
 name const * g_int_bit1_nonneg = nullptr;
 name const * g_int_one_nonneg = nullptr;
@@ -170,11 +158,17 @@ name const * g_int_neg_ne_of_pos = nullptr;
 name const * g_int_ne_neg_of_pos = nullptr;
 name const * g_int_neg_ne_zero_of_ne = nullptr;
 name const * g_int_zero_ne_neg_of_ne = nullptr;
-name const * g_int_decidable_linear_ordered_comm_group = nullptr;
 name const * g_interactive_param_desc = nullptr;
 name const * g_interactive_parse = nullptr;
+name const * g_io_core = nullptr;
+name const * g_monad_io_impl = nullptr;
+name const * g_monad_io_terminal_impl = nullptr;
+name const * g_monad_io_file_system_impl = nullptr;
+name const * g_monad_io_environment_impl = nullptr;
+name const * g_monad_io_process_impl = nullptr;
+name const * g_monad_io_random_impl = nullptr;
+name const * g_io_rand_nat = nullptr;
 name const * g_io = nullptr;
-name const * g_io_interface = nullptr;
 name const * g_is_associative = nullptr;
 name const * g_is_associative_assoc = nullptr;
 name const * g_is_commutative = nullptr;
@@ -290,8 +284,9 @@ name const * g_of_eq_true = nullptr;
 name const * g_of_iff_true = nullptr;
 name const * g_opt_param = nullptr;
 name const * g_or = nullptr;
-name const * g_inout_param = nullptr;
+name const * g_out_param = nullptr;
 name const * g_punit = nullptr;
+name const * g_punit_cases_on = nullptr;
 name const * g_punit_star = nullptr;
 name const * g_prod_mk = nullptr;
 name const * g_pprod = nullptr;
@@ -302,17 +297,6 @@ name const * g_propext = nullptr;
 name const * g_to_pexpr = nullptr;
 name const * g_quot_mk = nullptr;
 name const * g_quot_lift = nullptr;
-name const * g_real = nullptr;
-name const * g_real_of_int = nullptr;
-name const * g_real_to_int = nullptr;
-name const * g_real_is_int = nullptr;
-name const * g_real_has_neg = nullptr;
-name const * g_real_has_div = nullptr;
-name const * g_real_has_add = nullptr;
-name const * g_real_has_mul = nullptr;
-name const * g_real_has_sub = nullptr;
-name const * g_real_has_lt = nullptr;
-name const * g_real_has_le = nullptr;
 name const * g_reflected = nullptr;
 name const * g_reflected_subst = nullptr;
 name const * g_repr = nullptr;
@@ -329,10 +313,6 @@ name const * g_psigma_fst = nullptr;
 name const * g_psigma_snd = nullptr;
 name const * g_singleton = nullptr;
 name const * g_sizeof = nullptr;
-name const * g_smt_array = nullptr;
-name const * g_smt_select = nullptr;
-name const * g_smt_store = nullptr;
-name const * g_smt_prove = nullptr;
 name const * g_string = nullptr;
 name const * g_string_empty = nullptr;
 name const * g_string_str = nullptr;
@@ -354,6 +334,7 @@ name const * g_psum_inr = nullptr;
 name const * g_tactic = nullptr;
 name const * g_tactic_try = nullptr;
 name const * g_tactic_triv = nullptr;
+name const * g_tactic_mk_inj_eq = nullptr;
 name const * g_thunk = nullptr;
 name const * g_to_fmt = nullptr;
 name const * g_trans_rel_left = nullptr;
@@ -363,10 +344,10 @@ name const * g_true_intro = nullptr;
 name const * g_unification_hint = nullptr;
 name const * g_unification_hint_mk = nullptr;
 name const * g_unit = nullptr;
-name const * g_unit_cases_on = nullptr;
 name const * g_unit_star = nullptr;
-name const * g_unsafe_monad_from_pure_bind = nullptr;
+name const * g_monad_from_pure_bind = nullptr;
 name const * g_user_attribute = nullptr;
+name const * g_user_attribute_parse_reflect = nullptr;
 name const * g_vm_monitor = nullptr;
 name const * g_partial_order = nullptr;
 name const * g_well_founded_fix = nullptr;
@@ -375,12 +356,10 @@ name const * g_well_founded_tactics = nullptr;
 name const * g_well_founded_tactics_default = nullptr;
 name const * g_well_founded_tactics_rel_tac = nullptr;
 name const * g_well_founded_tactics_dec_tac = nullptr;
-name const * g_xor = nullptr;
 name const * g_zero_le_one = nullptr;
 name const * g_zero_lt_one = nullptr;
 name const * g_zero_mul = nullptr;
 void initialize_constants() {
-    g_abs = new name{"abs"};
     g_absurd = new name{"absurd"};
     g_acc_cases_on = new name{"acc", "cases_on"};
     g_acc_rec = new name{"acc", "rec"};
@@ -404,14 +383,15 @@ void initialize_constants() {
     g_bool_ff = new name{"bool", "ff"};
     g_bool_tt = new name{"bool", "tt"};
     g_combinator_K = new name{"combinator", "K"};
-    g_caching_user_attribute = new name{"caching_user_attribute"};
     g_cast = new name{"cast"};
     g_cast_heq = new name{"cast_heq"};
     g_char = new name{"char"};
+    g_char_mk = new name{"char", "mk"};
+    g_char_ne_of_vne = new name{"char", "ne_of_vne"};
     g_char_of_nat = new name{"char", "of_nat"};
     g_char_of_nat_ne_of_ne = new name{"char", "of_nat_ne_of_ne"};
-    g_classical_prop_decidable = new name{"classical", "prop_decidable"};
-    g_classical_type_decidable_eq = new name{"classical", "type_decidable_eq"};
+    g_is_valid_char_range_1 = new name{"is_valid_char_range_1"};
+    g_is_valid_char_range_2 = new name{"is_valid_char_range_2"};
     g_coe = new name{"coe"};
     g_coe_fn = new name{"coe_fn"};
     g_coe_sort = new name{"coe_sort"};
@@ -423,7 +403,6 @@ void initialize_constants() {
     g_decidable_to_bool = new name{"decidable", "to_bool"};
     g_distrib = new name{"distrib"};
     g_dite = new name{"dite"};
-    g_id = new name{"id"};
     g_empty = new name{"empty"};
     g_Exists = new name{"Exists"};
     g_eq = new name{"eq"};
@@ -456,18 +435,14 @@ void initialize_constants() {
     g_forall_congr_eq = new name{"forall_congr_eq"};
     g_forall_not_of_not_exists = new name{"forall_not_of_not_exists"};
     g_funext = new name{"funext"};
-    g_ge = new name{"ge"};
-    g_gt = new name{"gt"};
     g_has_add = new name{"has_add"};
     g_has_add_add = new name{"has_add", "add"};
-    g_andthen = new name{"andthen"};
+    g_has_andthen_andthen = new name{"has_andthen", "andthen"};
     g_has_bind_and_then = new name{"has_bind", "and_then"};
-    g_has_bind_bind = new name{"has_bind", "bind"};
     g_has_bind_seq = new name{"has_bind", "seq"};
     g_has_div = new name{"has_div"};
     g_has_div_div = new name{"has_div", "div"};
     g_has_emptyc_emptyc = new name{"has_emptyc", "emptyc"};
-    g_has_mod_mod = new name{"has_mod", "mod"};
     g_has_mul = new name{"has_mul"};
     g_has_mul_mul = new name{"has_mul", "mul"};
     g_has_insert_insert = new name{"has_insert", "insert"};
@@ -501,8 +476,9 @@ void initialize_constants() {
     g_heq_trans = new name{"heq", "trans"};
     g_heq_of_eq = new name{"heq_of_eq"};
     g_hole_command = new name{"hole_command"};
-    g_id_locked = new name{"id_locked"};
+    g_id = new name{"id"};
     g_id_rhs = new name{"id_rhs"};
+    g_id_delta = new name{"id_delta"};
     g_if_neg = new name{"if_neg"};
     g_if_pos = new name{"if_pos"};
     g_iff = new name{"iff"};
@@ -522,14 +498,6 @@ void initialize_constants() {
     g_implies_of_if_neg = new name{"implies_of_if_neg"};
     g_implies_of_if_pos = new name{"implies_of_if_pos"};
     g_int = new name{"int"};
-    g_int_has_add = new name{"int", "has_add"};
-    g_int_has_mul = new name{"int", "has_mul"};
-    g_int_has_sub = new name{"int", "has_sub"};
-    g_int_has_div = new name{"int", "has_div"};
-    g_int_has_le = new name{"int", "has_le"};
-    g_int_has_lt = new name{"int", "has_lt"};
-    g_int_has_neg = new name{"int", "has_neg"};
-    g_int_has_mod = new name{"int", "has_mod"};
     g_int_bit0_nonneg = new name{"int", "bit0_nonneg"};
     g_int_bit1_nonneg = new name{"int", "bit1_nonneg"};
     g_int_one_nonneg = new name{"int", "one_nonneg"};
@@ -547,11 +515,17 @@ void initialize_constants() {
     g_int_ne_neg_of_pos = new name{"int", "ne_neg_of_pos"};
     g_int_neg_ne_zero_of_ne = new name{"int", "neg_ne_zero_of_ne"};
     g_int_zero_ne_neg_of_ne = new name{"int", "zero_ne_neg_of_ne"};
-    g_int_decidable_linear_ordered_comm_group = new name{"int", "decidable_linear_ordered_comm_group"};
     g_interactive_param_desc = new name{"interactive", "param_desc"};
     g_interactive_parse = new name{"interactive", "parse"};
+    g_io_core = new name{"io_core"};
+    g_monad_io_impl = new name{"monad_io_impl"};
+    g_monad_io_terminal_impl = new name{"monad_io_terminal_impl"};
+    g_monad_io_file_system_impl = new name{"monad_io_file_system_impl"};
+    g_monad_io_environment_impl = new name{"monad_io_environment_impl"};
+    g_monad_io_process_impl = new name{"monad_io_process_impl"};
+    g_monad_io_random_impl = new name{"monad_io_random_impl"};
+    g_io_rand_nat = new name{"io_rand_nat"};
     g_io = new name{"io"};
-    g_io_interface = new name{"io", "interface"};
     g_is_associative = new name{"is_associative"};
     g_is_associative_assoc = new name{"is_associative", "assoc"};
     g_is_commutative = new name{"is_commutative"};
@@ -667,8 +641,9 @@ void initialize_constants() {
     g_of_iff_true = new name{"of_iff_true"};
     g_opt_param = new name{"opt_param"};
     g_or = new name{"or"};
-    g_inout_param = new name{"inout_param"};
+    g_out_param = new name{"out_param"};
     g_punit = new name{"punit"};
+    g_punit_cases_on = new name{"punit", "cases_on"};
     g_punit_star = new name{"punit", "star"};
     g_prod_mk = new name{"prod", "mk"};
     g_pprod = new name{"pprod"};
@@ -679,17 +654,6 @@ void initialize_constants() {
     g_to_pexpr = new name{"to_pexpr"};
     g_quot_mk = new name{"quot", "mk"};
     g_quot_lift = new name{"quot", "lift"};
-    g_real = new name{"real"};
-    g_real_of_int = new name{"real", "of_int"};
-    g_real_to_int = new name{"real", "to_int"};
-    g_real_is_int = new name{"real", "is_int"};
-    g_real_has_neg = new name{"real", "has_neg"};
-    g_real_has_div = new name{"real", "has_div"};
-    g_real_has_add = new name{"real", "has_add"};
-    g_real_has_mul = new name{"real", "has_mul"};
-    g_real_has_sub = new name{"real", "has_sub"};
-    g_real_has_lt = new name{"real", "has_lt"};
-    g_real_has_le = new name{"real", "has_le"};
     g_reflected = new name{"reflected"};
     g_reflected_subst = new name{"reflected", "subst"};
     g_repr = new name{"repr"};
@@ -706,10 +670,6 @@ void initialize_constants() {
     g_psigma_snd = new name{"psigma", "snd"};
     g_singleton = new name{"singleton"};
     g_sizeof = new name{"sizeof"};
-    g_smt_array = new name{"smt", "array"};
-    g_smt_select = new name{"smt", "select"};
-    g_smt_store = new name{"smt", "store"};
-    g_smt_prove = new name{"smt", "prove"};
     g_string = new name{"string"};
     g_string_empty = new name{"string", "empty"};
     g_string_str = new name{"string", "str"};
@@ -731,6 +691,7 @@ void initialize_constants() {
     g_tactic = new name{"tactic"};
     g_tactic_try = new name{"tactic", "try"};
     g_tactic_triv = new name{"tactic", "triv"};
+    g_tactic_mk_inj_eq = new name{"tactic", "mk_inj_eq"};
     g_thunk = new name{"thunk"};
     g_to_fmt = new name{"to_fmt"};
     g_trans_rel_left = new name{"trans_rel_left"};
@@ -740,10 +701,10 @@ void initialize_constants() {
     g_unification_hint = new name{"unification_hint"};
     g_unification_hint_mk = new name{"unification_hint", "mk"};
     g_unit = new name{"unit"};
-    g_unit_cases_on = new name{"unit", "cases_on"};
     g_unit_star = new name{"unit", "star"};
-    g_unsafe_monad_from_pure_bind = new name{"unsafe_monad_from_pure_bind"};
+    g_monad_from_pure_bind = new name{"monad_from_pure_bind"};
     g_user_attribute = new name{"user_attribute"};
+    g_user_attribute_parse_reflect = new name{"user_attribute", "parse_reflect"};
     g_vm_monitor = new name{"vm_monitor"};
     g_partial_order = new name{"partial_order"};
     g_well_founded_fix = new name{"well_founded", "fix"};
@@ -752,13 +713,11 @@ void initialize_constants() {
     g_well_founded_tactics_default = new name{"well_founded_tactics", "default"};
     g_well_founded_tactics_rel_tac = new name{"well_founded_tactics", "rel_tac"};
     g_well_founded_tactics_dec_tac = new name{"well_founded_tactics", "dec_tac"};
-    g_xor = new name{"xor"};
     g_zero_le_one = new name{"zero_le_one"};
     g_zero_lt_one = new name{"zero_lt_one"};
     g_zero_mul = new name{"zero_mul"};
 }
 void finalize_constants() {
-    delete g_abs;
     delete g_absurd;
     delete g_acc_cases_on;
     delete g_acc_rec;
@@ -782,14 +741,15 @@ void finalize_constants() {
     delete g_bool_ff;
     delete g_bool_tt;
     delete g_combinator_K;
-    delete g_caching_user_attribute;
     delete g_cast;
     delete g_cast_heq;
     delete g_char;
+    delete g_char_mk;
+    delete g_char_ne_of_vne;
     delete g_char_of_nat;
     delete g_char_of_nat_ne_of_ne;
-    delete g_classical_prop_decidable;
-    delete g_classical_type_decidable_eq;
+    delete g_is_valid_char_range_1;
+    delete g_is_valid_char_range_2;
     delete g_coe;
     delete g_coe_fn;
     delete g_coe_sort;
@@ -801,7 +761,6 @@ void finalize_constants() {
     delete g_decidable_to_bool;
     delete g_distrib;
     delete g_dite;
-    delete g_id;
     delete g_empty;
     delete g_Exists;
     delete g_eq;
@@ -834,18 +793,14 @@ void finalize_constants() {
     delete g_forall_congr_eq;
     delete g_forall_not_of_not_exists;
     delete g_funext;
-    delete g_ge;
-    delete g_gt;
     delete g_has_add;
     delete g_has_add_add;
-    delete g_andthen;
+    delete g_has_andthen_andthen;
     delete g_has_bind_and_then;
-    delete g_has_bind_bind;
     delete g_has_bind_seq;
     delete g_has_div;
     delete g_has_div_div;
     delete g_has_emptyc_emptyc;
-    delete g_has_mod_mod;
     delete g_has_mul;
     delete g_has_mul_mul;
     delete g_has_insert_insert;
@@ -879,8 +834,9 @@ void finalize_constants() {
     delete g_heq_trans;
     delete g_heq_of_eq;
     delete g_hole_command;
-    delete g_id_locked;
+    delete g_id;
     delete g_id_rhs;
+    delete g_id_delta;
     delete g_if_neg;
     delete g_if_pos;
     delete g_iff;
@@ -900,14 +856,6 @@ void finalize_constants() {
     delete g_implies_of_if_neg;
     delete g_implies_of_if_pos;
     delete g_int;
-    delete g_int_has_add;
-    delete g_int_has_mul;
-    delete g_int_has_sub;
-    delete g_int_has_div;
-    delete g_int_has_le;
-    delete g_int_has_lt;
-    delete g_int_has_neg;
-    delete g_int_has_mod;
     delete g_int_bit0_nonneg;
     delete g_int_bit1_nonneg;
     delete g_int_one_nonneg;
@@ -925,11 +873,17 @@ void finalize_constants() {
     delete g_int_ne_neg_of_pos;
     delete g_int_neg_ne_zero_of_ne;
     delete g_int_zero_ne_neg_of_ne;
-    delete g_int_decidable_linear_ordered_comm_group;
     delete g_interactive_param_desc;
     delete g_interactive_parse;
+    delete g_io_core;
+    delete g_monad_io_impl;
+    delete g_monad_io_terminal_impl;
+    delete g_monad_io_file_system_impl;
+    delete g_monad_io_environment_impl;
+    delete g_monad_io_process_impl;
+    delete g_monad_io_random_impl;
+    delete g_io_rand_nat;
     delete g_io;
-    delete g_io_interface;
     delete g_is_associative;
     delete g_is_associative_assoc;
     delete g_is_commutative;
@@ -1045,8 +999,9 @@ void finalize_constants() {
     delete g_of_iff_true;
     delete g_opt_param;
     delete g_or;
-    delete g_inout_param;
+    delete g_out_param;
     delete g_punit;
+    delete g_punit_cases_on;
     delete g_punit_star;
     delete g_prod_mk;
     delete g_pprod;
@@ -1057,17 +1012,6 @@ void finalize_constants() {
     delete g_to_pexpr;
     delete g_quot_mk;
     delete g_quot_lift;
-    delete g_real;
-    delete g_real_of_int;
-    delete g_real_to_int;
-    delete g_real_is_int;
-    delete g_real_has_neg;
-    delete g_real_has_div;
-    delete g_real_has_add;
-    delete g_real_has_mul;
-    delete g_real_has_sub;
-    delete g_real_has_lt;
-    delete g_real_has_le;
     delete g_reflected;
     delete g_reflected_subst;
     delete g_repr;
@@ -1084,10 +1028,6 @@ void finalize_constants() {
     delete g_psigma_snd;
     delete g_singleton;
     delete g_sizeof;
-    delete g_smt_array;
-    delete g_smt_select;
-    delete g_smt_store;
-    delete g_smt_prove;
     delete g_string;
     delete g_string_empty;
     delete g_string_str;
@@ -1109,6 +1049,7 @@ void finalize_constants() {
     delete g_tactic;
     delete g_tactic_try;
     delete g_tactic_triv;
+    delete g_tactic_mk_inj_eq;
     delete g_thunk;
     delete g_to_fmt;
     delete g_trans_rel_left;
@@ -1118,10 +1059,10 @@ void finalize_constants() {
     delete g_unification_hint;
     delete g_unification_hint_mk;
     delete g_unit;
-    delete g_unit_cases_on;
     delete g_unit_star;
-    delete g_unsafe_monad_from_pure_bind;
+    delete g_monad_from_pure_bind;
     delete g_user_attribute;
+    delete g_user_attribute_parse_reflect;
     delete g_vm_monitor;
     delete g_partial_order;
     delete g_well_founded_fix;
@@ -1130,12 +1071,10 @@ void finalize_constants() {
     delete g_well_founded_tactics_default;
     delete g_well_founded_tactics_rel_tac;
     delete g_well_founded_tactics_dec_tac;
-    delete g_xor;
     delete g_zero_le_one;
     delete g_zero_lt_one;
     delete g_zero_mul;
 }
-name const & get_abs_name() { return *g_abs; }
 name const & get_absurd_name() { return *g_absurd; }
 name const & get_acc_cases_on_name() { return *g_acc_cases_on; }
 name const & get_acc_rec_name() { return *g_acc_rec; }
@@ -1159,14 +1098,15 @@ name const & get_bool_name() { return *g_bool; }
 name const & get_bool_ff_name() { return *g_bool_ff; }
 name const & get_bool_tt_name() { return *g_bool_tt; }
 name const & get_combinator_K_name() { return *g_combinator_K; }
-name const & get_caching_user_attribute_name() { return *g_caching_user_attribute; }
 name const & get_cast_name() { return *g_cast; }
 name const & get_cast_heq_name() { return *g_cast_heq; }
 name const & get_char_name() { return *g_char; }
+name const & get_char_mk_name() { return *g_char_mk; }
+name const & get_char_ne_of_vne_name() { return *g_char_ne_of_vne; }
 name const & get_char_of_nat_name() { return *g_char_of_nat; }
 name const & get_char_of_nat_ne_of_ne_name() { return *g_char_of_nat_ne_of_ne; }
-name const & get_classical_prop_decidable_name() { return *g_classical_prop_decidable; }
-name const & get_classical_type_decidable_eq_name() { return *g_classical_type_decidable_eq; }
+name const & get_is_valid_char_range_1_name() { return *g_is_valid_char_range_1; }
+name const & get_is_valid_char_range_2_name() { return *g_is_valid_char_range_2; }
 name const & get_coe_name() { return *g_coe; }
 name const & get_coe_fn_name() { return *g_coe_fn; }
 name const & get_coe_sort_name() { return *g_coe_sort; }
@@ -1178,7 +1118,6 @@ name const & get_decidable_name() { return *g_decidable; }
 name const & get_decidable_to_bool_name() { return *g_decidable_to_bool; }
 name const & get_distrib_name() { return *g_distrib; }
 name const & get_dite_name() { return *g_dite; }
-name const & get_id_name() { return *g_id; }
 name const & get_empty_name() { return *g_empty; }
 name const & get_Exists_name() { return *g_Exists; }
 name const & get_eq_name() { return *g_eq; }
@@ -1211,18 +1150,14 @@ name const & get_forall_congr_name() { return *g_forall_congr; }
 name const & get_forall_congr_eq_name() { return *g_forall_congr_eq; }
 name const & get_forall_not_of_not_exists_name() { return *g_forall_not_of_not_exists; }
 name const & get_funext_name() { return *g_funext; }
-name const & get_ge_name() { return *g_ge; }
-name const & get_gt_name() { return *g_gt; }
 name const & get_has_add_name() { return *g_has_add; }
 name const & get_has_add_add_name() { return *g_has_add_add; }
-name const & get_andthen_name() { return *g_andthen; }
+name const & get_has_andthen_andthen_name() { return *g_has_andthen_andthen; }
 name const & get_has_bind_and_then_name() { return *g_has_bind_and_then; }
-name const & get_has_bind_bind_name() { return *g_has_bind_bind; }
 name const & get_has_bind_seq_name() { return *g_has_bind_seq; }
 name const & get_has_div_name() { return *g_has_div; }
 name const & get_has_div_div_name() { return *g_has_div_div; }
 name const & get_has_emptyc_emptyc_name() { return *g_has_emptyc_emptyc; }
-name const & get_has_mod_mod_name() { return *g_has_mod_mod; }
 name const & get_has_mul_name() { return *g_has_mul; }
 name const & get_has_mul_mul_name() { return *g_has_mul_mul; }
 name const & get_has_insert_insert_name() { return *g_has_insert_insert; }
@@ -1256,8 +1191,9 @@ name const & get_heq_symm_name() { return *g_heq_symm; }
 name const & get_heq_trans_name() { return *g_heq_trans; }
 name const & get_heq_of_eq_name() { return *g_heq_of_eq; }
 name const & get_hole_command_name() { return *g_hole_command; }
-name const & get_id_locked_name() { return *g_id_locked; }
+name const & get_id_name() { return *g_id; }
 name const & get_id_rhs_name() { return *g_id_rhs; }
+name const & get_id_delta_name() { return *g_id_delta; }
 name const & get_if_neg_name() { return *g_if_neg; }
 name const & get_if_pos_name() { return *g_if_pos; }
 name const & get_iff_name() { return *g_iff; }
@@ -1277,14 +1213,6 @@ name const & get_implies_name() { return *g_implies; }
 name const & get_implies_of_if_neg_name() { return *g_implies_of_if_neg; }
 name const & get_implies_of_if_pos_name() { return *g_implies_of_if_pos; }
 name const & get_int_name() { return *g_int; }
-name const & get_int_has_add_name() { return *g_int_has_add; }
-name const & get_int_has_mul_name() { return *g_int_has_mul; }
-name const & get_int_has_sub_name() { return *g_int_has_sub; }
-name const & get_int_has_div_name() { return *g_int_has_div; }
-name const & get_int_has_le_name() { return *g_int_has_le; }
-name const & get_int_has_lt_name() { return *g_int_has_lt; }
-name const & get_int_has_neg_name() { return *g_int_has_neg; }
-name const & get_int_has_mod_name() { return *g_int_has_mod; }
 name const & get_int_bit0_nonneg_name() { return *g_int_bit0_nonneg; }
 name const & get_int_bit1_nonneg_name() { return *g_int_bit1_nonneg; }
 name const & get_int_one_nonneg_name() { return *g_int_one_nonneg; }
@@ -1302,11 +1230,17 @@ name const & get_int_neg_ne_of_pos_name() { return *g_int_neg_ne_of_pos; }
 name const & get_int_ne_neg_of_pos_name() { return *g_int_ne_neg_of_pos; }
 name const & get_int_neg_ne_zero_of_ne_name() { return *g_int_neg_ne_zero_of_ne; }
 name const & get_int_zero_ne_neg_of_ne_name() { return *g_int_zero_ne_neg_of_ne; }
-name const & get_int_decidable_linear_ordered_comm_group_name() { return *g_int_decidable_linear_ordered_comm_group; }
 name const & get_interactive_param_desc_name() { return *g_interactive_param_desc; }
 name const & get_interactive_parse_name() { return *g_interactive_parse; }
+name const & get_io_core_name() { return *g_io_core; }
+name const & get_monad_io_impl_name() { return *g_monad_io_impl; }
+name const & get_monad_io_terminal_impl_name() { return *g_monad_io_terminal_impl; }
+name const & get_monad_io_file_system_impl_name() { return *g_monad_io_file_system_impl; }
+name const & get_monad_io_environment_impl_name() { return *g_monad_io_environment_impl; }
+name const & get_monad_io_process_impl_name() { return *g_monad_io_process_impl; }
+name const & get_monad_io_random_impl_name() { return *g_monad_io_random_impl; }
+name const & get_io_rand_nat_name() { return *g_io_rand_nat; }
 name const & get_io_name() { return *g_io; }
-name const & get_io_interface_name() { return *g_io_interface; }
 name const & get_is_associative_name() { return *g_is_associative; }
 name const & get_is_associative_assoc_name() { return *g_is_associative_assoc; }
 name const & get_is_commutative_name() { return *g_is_commutative; }
@@ -1422,8 +1356,9 @@ name const & get_of_eq_true_name() { return *g_of_eq_true; }
 name const & get_of_iff_true_name() { return *g_of_iff_true; }
 name const & get_opt_param_name() { return *g_opt_param; }
 name const & get_or_name() { return *g_or; }
-name const & get_inout_param_name() { return *g_inout_param; }
+name const & get_out_param_name() { return *g_out_param; }
 name const & get_punit_name() { return *g_punit; }
+name const & get_punit_cases_on_name() { return *g_punit_cases_on; }
 name const & get_punit_star_name() { return *g_punit_star; }
 name const & get_prod_mk_name() { return *g_prod_mk; }
 name const & get_pprod_name() { return *g_pprod; }
@@ -1434,17 +1369,6 @@ name const & get_propext_name() { return *g_propext; }
 name const & get_to_pexpr_name() { return *g_to_pexpr; }
 name const & get_quot_mk_name() { return *g_quot_mk; }
 name const & get_quot_lift_name() { return *g_quot_lift; }
-name const & get_real_name() { return *g_real; }
-name const & get_real_of_int_name() { return *g_real_of_int; }
-name const & get_real_to_int_name() { return *g_real_to_int; }
-name const & get_real_is_int_name() { return *g_real_is_int; }
-name const & get_real_has_neg_name() { return *g_real_has_neg; }
-name const & get_real_has_div_name() { return *g_real_has_div; }
-name const & get_real_has_add_name() { return *g_real_has_add; }
-name const & get_real_has_mul_name() { return *g_real_has_mul; }
-name const & get_real_has_sub_name() { return *g_real_has_sub; }
-name const & get_real_has_lt_name() { return *g_real_has_lt; }
-name const & get_real_has_le_name() { return *g_real_has_le; }
 name const & get_reflected_name() { return *g_reflected; }
 name const & get_reflected_subst_name() { return *g_reflected_subst; }
 name const & get_repr_name() { return *g_repr; }
@@ -1461,10 +1385,6 @@ name const & get_psigma_fst_name() { return *g_psigma_fst; }
 name const & get_psigma_snd_name() { return *g_psigma_snd; }
 name const & get_singleton_name() { return *g_singleton; }
 name const & get_sizeof_name() { return *g_sizeof; }
-name const & get_smt_array_name() { return *g_smt_array; }
-name const & get_smt_select_name() { return *g_smt_select; }
-name const & get_smt_store_name() { return *g_smt_store; }
-name const & get_smt_prove_name() { return *g_smt_prove; }
 name const & get_string_name() { return *g_string; }
 name const & get_string_empty_name() { return *g_string_empty; }
 name const & get_string_str_name() { return *g_string_str; }
@@ -1486,6 +1406,7 @@ name const & get_psum_inr_name() { return *g_psum_inr; }
 name const & get_tactic_name() { return *g_tactic; }
 name const & get_tactic_try_name() { return *g_tactic_try; }
 name const & get_tactic_triv_name() { return *g_tactic_triv; }
+name const & get_tactic_mk_inj_eq_name() { return *g_tactic_mk_inj_eq; }
 name const & get_thunk_name() { return *g_thunk; }
 name const & get_to_fmt_name() { return *g_to_fmt; }
 name const & get_trans_rel_left_name() { return *g_trans_rel_left; }
@@ -1495,10 +1416,10 @@ name const & get_true_intro_name() { return *g_true_intro; }
 name const & get_unification_hint_name() { return *g_unification_hint; }
 name const & get_unification_hint_mk_name() { return *g_unification_hint_mk; }
 name const & get_unit_name() { return *g_unit; }
-name const & get_unit_cases_on_name() { return *g_unit_cases_on; }
 name const & get_unit_star_name() { return *g_unit_star; }
-name const & get_unsafe_monad_from_pure_bind_name() { return *g_unsafe_monad_from_pure_bind; }
+name const & get_monad_from_pure_bind_name() { return *g_monad_from_pure_bind; }
 name const & get_user_attribute_name() { return *g_user_attribute; }
+name const & get_user_attribute_parse_reflect_name() { return *g_user_attribute_parse_reflect; }
 name const & get_vm_monitor_name() { return *g_vm_monitor; }
 name const & get_partial_order_name() { return *g_partial_order; }
 name const & get_well_founded_fix_name() { return *g_well_founded_fix; }
@@ -1507,7 +1428,6 @@ name const & get_well_founded_tactics_name() { return *g_well_founded_tactics; }
 name const & get_well_founded_tactics_default_name() { return *g_well_founded_tactics_default; }
 name const & get_well_founded_tactics_rel_tac_name() { return *g_well_founded_tactics_rel_tac; }
 name const & get_well_founded_tactics_dec_tac_name() { return *g_well_founded_tactics_dec_tac; }
-name const & get_xor_name() { return *g_xor; }
 name const & get_zero_le_one_name() { return *g_zero_le_one; }
 name const & get_zero_lt_one_name() { return *g_zero_lt_one; }
 name const & get_zero_mul_name() { return *g_zero_mul; }

@@ -179,8 +179,21 @@ environment end_scoped_cmd(parser & p) {
     }
 }
 
+/* Auxiliary class to setup private naming scope for transient commands such as #check/#reduce/#eval and run_cmd */
+class transient_cmd_scope {
+    environment            m_env;
+    private_name_scope     m_prv_scope;
+public:
+    transient_cmd_scope(parser & p):
+        m_env(p.env()),
+        m_prv_scope(true, m_env) {
+        p.set_env(m_env);
+    }
+};
+
 environment check_cmd(parser & p) {
     expr e; level_param_names ls;
+    transient_cmd_scope cmd_scope(p);
     std::tie(e, ls) = parse_local_expr(p, "_check");
     type_checker tc(p.env(), true, false);
     expr type = tc.check(e, ls);
@@ -200,6 +213,7 @@ environment check_cmd(parser & p) {
 }
 
 environment reduce_cmd(parser & p) {
+    transient_cmd_scope cmd_scope(p);
     bool whnf   = false;
     if (p.curr_is_token(get_whnf_tk())) {
         p.next();
@@ -208,13 +222,12 @@ environment reduce_cmd(parser & p) {
     expr e; level_param_names ls;
     std::tie(e, ls) = parse_local_expr(p, "_reduce");
     expr r;
+    type_context_old ctx(p.env(), p.get_options(), metavar_context(), local_context(), transparency_mode::All);
     if (whnf) {
-        type_checker tc(p.env(), true, false);
-        r = tc.whnf(e);
+        r = ctx.whnf(e);
     } else {
-        type_checker tc(p.env(), true, false);
         bool eta = false;
-        r = normalize(tc, e, eta);
+        r = normalize(ctx, e, eta);
     }
     auto out = p.mk_message(p.cmd_pos(), p.pos(), INFORMATION);
     out.set_caption("reduce result") << r;
@@ -378,9 +391,9 @@ static environment init_quotient_cmd(parser & p) {
 
 /*
    Temporary procedure that converts metavariables in \c e to metavar_context metavariables.
-   After we convert the frontend to type_context, we will not need to use this procedure.
+   After we convert the frontend to type_context_old, we will not need to use this procedure.
 */
-static expr convert_metavars(metavar_context & ctx, expr const & e) {
+static expr convert_metavars(metavar_context & mctx, expr const & e) {
     expr_map<expr> cache;
 
     std::function<expr(expr const & e)> convert = [&](expr const & e) {
@@ -389,7 +402,7 @@ static expr convert_metavars(metavar_context & ctx, expr const & e) {
                     auto it = cache.find(e);
                     if (it != cache.end())
                         return some_expr(it->second);
-                    expr m = ctx.mk_metavar_decl(local_context(), convert(mlocal_type(e)));
+                    expr m = mctx.mk_metavar_decl(local_context(), convert(mlocal_type(e)));
                     cache.insert(mk_pair(e, m));
                     return some_expr(m);
                 } else {
@@ -401,6 +414,7 @@ static expr convert_metavars(metavar_context & ctx, expr const & e) {
 }
 
 static environment unify_cmd(parser & p) {
+    transient_cmd_scope cmd_scope(p);
     environment const & env = p.env();
     expr e1; level_param_names ls1;
     std::tie(e1, ls1) = parse_local_expr(p, "_unify");
@@ -413,7 +427,7 @@ static environment unify_cmd(parser & p) {
     e2 = convert_metavars(mctx, e2);
     auto rep = p.mk_message(p.cmd_pos(), p.pos(), INFORMATION);
     rep << e1 << " =?= " << e2 << "\n";
-    type_context ctx(env, p.get_options(), mctx, lctx, transparency_mode::Semireducible);
+    type_context_old ctx(env, p.get_options(), mctx, lctx, transparency_mode::Semireducible);
     bool success = ctx.is_def_eq(e1, e2);
     if (success)
         rep << ctx.instantiate_mvars(e1) << " =?= " << ctx.instantiate_mvars(e2) << "\n";
@@ -432,14 +446,16 @@ static environment compile_cmd(parser & p) {
 }
 
 static environment eval_cmd(parser & p) {
+    transient_cmd_scope cmd_scope(p);
     auto pos = p.pos();
     expr e; level_param_names ls;
     std::tie(e, ls) = parse_local_expr(p, "_eval", /* relaxed */ false);
     if (has_synthetic_sorry(e))
         return p.env();
 
-    type_context tc(p.env(), transparency_mode::All);
+    type_context_old tc(p.env(), transparency_mode::All);
     auto type = tc.infer(e);
+    bool has_repr_inst = false;
 
     /* Check if resultant type has an instance of has_repr */
     try {
@@ -447,8 +463,9 @@ static environment eval_cmd(parser & p) {
         optional<expr> repr_instance = tc.mk_class_instance(has_repr_type);
         if (repr_instance) {
             /* Modify the 'program' to (repr e) */
-            e         = mk_app(tc, get_repr_name(), type, *repr_instance, e);
-            type      = tc.infer(e);
+            e             = mk_app(tc, get_repr_name(), type, *repr_instance, e);
+            type          = tc.infer(e);
+            has_repr_inst = true;
         }
     } catch (exception &) {}
 
@@ -464,16 +481,19 @@ static environment eval_cmd(parser & p) {
     auto new_env = compile_expr(p.env(), fn_name, ls, type, e, pos);
 
     auto out = p.mk_message(p.cmd_pos(), p.pos(), INFORMATION);
+    out.set_caption("eval result");
     scope_traces_as_messages scope_traces(p.get_stream_name(), p.cmd_pos());
     bool should_report = false;
 
     auto run = [&] {
         eval_helper fn(new_env, p.get_options(), fn_name);
-        fn.dependency_injection();
         try {
             if (!fn.try_exec()) {
                 auto r = fn.invoke_fn();
                 should_report = true;
+                if (!has_repr_inst) {
+                    (p.mk_message(p.cmd_pos(), WARNING) << "result type does not have an instance of type class 'has_repr', dumping internal representation").report();
+                }
                 if (is_constant(fn.get_type(), get_string_name())) {
                     out << to_string(r);
                 } else {
@@ -536,7 +556,7 @@ environment add_key_equivalence_cmd(parser & p) {
 }
 
 static environment run_command_cmd(parser & p) {
-    /* initial state for executing the tactic */
+    transient_cmd_scope cmd_scope(p);
     module::scope_pos_info scope_pos(p.pos());
     environment env      = p.env();
     options opts         = p.get_options();
@@ -553,6 +573,28 @@ static environment run_command_cmd(parser & p) {
 
 environment import_cmd(parser & p) {
     throw parser_error("invalid 'import' command, it must be used in the beginning of the file", p.cmd_pos());
+}
+
+environment hide_cmd(parser & p) {
+    buffer<name> ids;
+    while (p.curr_is_identifier()) {
+        name id = p.get_name_val();
+        p.next();
+        ids.push_back(id);
+    }
+    if (ids.empty())
+        throw parser_error("invalid 'hide' command, identifier expected", p.cmd_pos());
+    environment new_env = p.env();
+    for (name id : ids) {
+        if (get_expr_aliases(new_env, id)) {
+            new_env = erase_expr_aliases(new_env, id);
+        } else {
+            /* TODO(Leo): check if `id` is a declaration and hide it too. */
+            throw parser_error(sstream() << "invalid 'hide' command, '" << id << "' is not an alias",
+                               p.cmd_pos());
+        }
+    }
+    return new_env;
 }
 
 void init_cmd_table(cmd_table & r) {
@@ -575,6 +617,7 @@ void init_cmd_table(cmd_table & r) {
     add_cmd(r, cmd_info("add_key_equivalence", "register that to symbols are equivalence for key-matching", add_key_equivalence_cmd));
     add_cmd(r, cmd_info("run_cmd",           "execute an user defined command at top-level", run_command_cmd));
     add_cmd(r, cmd_info("import",            "import module(s)", import_cmd));
+    add_cmd(r, cmd_info("hide",              "hide aliases in the current scope", hide_cmd));
     add_cmd(r, cmd_info("#unify",            "(for debugging purposes)", unify_cmd));
     add_cmd(r, cmd_info("#compile",          "(for debugging purposes)", compile_cmd));
 

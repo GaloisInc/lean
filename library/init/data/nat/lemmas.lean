@@ -4,31 +4,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Leonardo de Moura, Jeremy Avigad
 -/
 prelude
-import init.data.nat.basic init.data.nat.div init.data.nat.pow init.meta init.algebra.functions
+import init.data.nat.basic init.data.nat.div init.meta init.algebra.functions
 universes u
 
 namespace nat
 attribute [pre_smt] nat_zero_eq_zero
-
-protected lemma zero_add : ∀ n : ℕ, 0 + n = n
-| 0     := rfl
-| (n+1) := congr_arg succ (zero_add n)
-
-lemma succ_add : ∀ n m : ℕ, (succ n) + m = succ (n + m)
-| n 0     := rfl
-| n (m+1) := congr_arg succ (succ_add n m)
-
-lemma add_succ (n m : ℕ) : n + succ m = succ (n + m) :=
-rfl
-
-protected lemma add_zero (n : ℕ) : n + 0 = n :=
-rfl
-
-lemma add_one (n : ℕ) : n + 1 = succ n :=
-rfl
-
-lemma succ_eq_add_one (n : ℕ) : succ n = n + 1 :=
-rfl
 
 protected lemma add_comm : ∀ n m : ℕ, n + m = m + n
 | n 0     := eq.symm (nat.zero_add n)
@@ -47,7 +27,7 @@ left_comm nat.add nat.add_comm nat.add_assoc
 protected lemma add_left_cancel : ∀ {n m k : ℕ}, n + m = n + k → m = k
 | 0        m k := by simp [nat.zero_add] {contextual := tt}
 | (succ n) m k := λ h,
-  have n+m = n+k, by simp [succ_add] at h; injection h,
+  have n+m = n+k, by { simp [succ_add] at h, assumption },
   add_left_cancel this
 
 protected lemma add_right_cancel {n m k : ℕ} (h : n + m = k + m) : n = k :=
@@ -230,10 +210,10 @@ le_of_succ_le
 lemma lt_of_succ_lt_succ {a b : ℕ} : succ a < succ b → a < b :=
 le_of_succ_le_succ
 
-lemma pred_lt_pred : ∀ {n m : ℕ}, n ≠ 0 → m ≠ 0 → n < m → pred n < pred m
-| 0         _       h₁ h₂ h := absurd rfl h₁
-| _         0       h₁ h₂ h := absurd rfl h₂
-| (succ n) (succ m) _  _  h := lt_of_succ_lt_succ h
+lemma pred_lt_pred : ∀ {n m : ℕ}, n ≠ 0 → n < m → pred n < pred m
+| 0         _       h₁ h := absurd rfl h₁
+| _         0       h₁ h := absurd h (not_lt_zero _)
+| (succ n) (succ m) _  h := lt_of_succ_lt_succ h
 
 lemma lt_of_succ_le {a b : ℕ} (h : succ a ≤ b) : a < b := h
 
@@ -320,8 +300,7 @@ protected lemma mul_lt_mul_of_pos_right {n m k : ℕ} (h : n < m) (hk : k > 0) :
 mul_comm k m ▸ mul_comm k n ▸ nat.mul_lt_mul_of_pos_left h hk
 
 instance : decidable_linear_ordered_semiring nat :=
-{ nat.comm_semiring with
-  add_left_cancel            := @nat.add_left_cancel,
+{ add_left_cancel            := @nat.add_left_cancel,
   add_right_cancel           := @nat.add_right_cancel,
   lt                         := nat.lt,
   le                         := nat.le,
@@ -329,9 +308,7 @@ instance : decidable_linear_ordered_semiring nat :=
   le_trans                   := @nat.le_trans,
   le_antisymm                := @nat.le_antisymm,
   le_total                   := @nat.le_total,
-  lt_of_add_lt_add_left      := @nat.lt_of_add_lt_add_left,
   lt_iff_le_not_le           := @lt_iff_le_not_le _ _,
-  add_lt_add_left            := @nat.add_lt_add_left,
   add_le_add_left            := @nat.add_le_add_left,
   le_of_add_le_add_left      := @nat.le_of_add_le_add_left,
   zero_lt_one                := zero_lt_succ 0,
@@ -341,12 +318,13 @@ instance : decidable_linear_ordered_semiring nat :=
   mul_lt_mul_of_pos_right    := @nat.mul_lt_mul_of_pos_right,
   decidable_lt               := nat.decidable_lt,
   decidable_le               := nat.decidable_le,
-  decidable_eq               := nat.decidable_eq }
+  decidable_eq               := nat.decidable_eq,
+  ..nat.comm_semiring }
 
 -- all the fields are already included in the decidable_linear_ordered_semiring instance
 instance : decidable_linear_ordered_cancel_comm_monoid ℕ :=
-{ nat.decidable_linear_ordered_semiring with
-  add_left_cancel := @nat.add_left_cancel }
+{ add_left_cancel := @nat.add_left_cancel,
+  ..nat.decidable_linear_ordered_semiring }
 
 lemma le_of_lt_succ {m n : nat} : m < succ n → m ≤ n :=
 le_of_succ_le_succ
@@ -373,23 +351,11 @@ protected theorem sub_le_sub_right {n m : ℕ} (h : n ≤ m) : ∀ k, n - k ≤ 
 
 /- bit0/bit1 properties -/
 
-protected lemma bit0_succ_eq (n : ℕ) : bit0 (succ n) = succ (succ (bit0 n)) :=
-show succ (succ n + n) = succ (succ (n + n)), from
-congr_arg succ (succ_add n n)
-
 protected lemma bit1_eq_succ_bit0 (n : ℕ) : bit1 n = succ (bit0 n) :=
 rfl
 
 protected lemma bit1_succ_eq (n : ℕ) : bit1 (succ n) = succ (succ (bit1 n)) :=
 eq.trans (nat.bit1_eq_succ_bit0 (succ n)) (congr_arg succ (nat.bit0_succ_eq n))
-
-protected lemma bit0_ne_zero : ∀ {n : ℕ}, n ≠ 0 → bit0 n ≠ 0
-| 0     h := absurd rfl h
-| (n+1) h := succ_ne_zero _
-
-protected lemma bit1_ne_zero (n : ℕ) : bit1 n ≠ 0 :=
-show succ (n + n) ≠ 0, from
-succ_ne_zero (n + n)
 
 protected lemma bit1_ne_one : ∀ {n : ℕ}, n ≠ 0 → bit1 n ≠ 1
 | 0     h h1 := absurd rfl h
@@ -429,14 +395,14 @@ protected lemma bit0_inj : ∀ {n m : ℕ}, bit0 n = bit0 m → n = m
 | (n+1) 0     h := by contradiction
 | (n+1) (m+1) h :=
   have succ (succ (n + n)) = succ (succ (m + m)),
-  begin unfold bit0 at h, simp [add_one, add_succ, succ_add] at h, exact h end,
-  have n + n = m + m, by repeat {injection this with this},
+  begin unfold bit0 at h, simp [add_one, add_succ, succ_add] at h, rw h end,
+  have n + n = m + m, by iterate { injection this with this },
   have n = m, from bit0_inj this,
   by rw this
 
 protected lemma bit1_inj : ∀ {n m : ℕ}, bit1 n = bit1 m → n = m :=
 λ n m h,
-have succ (bit0 n) = succ (bit0 m), begin simp [nat.bit1_eq_succ_bit0] at h, assumption end,
+have succ (bit0 n) = succ (bit0 m), begin simp [nat.bit1_eq_succ_bit0] at h, rw h end,
 have bit0 n = bit0 m, by injection this,
 nat.bit0_inj this
 
@@ -457,17 +423,6 @@ ne.symm (nat.bit0_ne_one n)
 
 protected lemma one_ne_bit1 {n : ℕ} : n ≠ 0 → 1 ≠ bit1 n :=
 λ h, ne.symm (nat.bit1_ne_one h)
-
-protected lemma zero_lt_bit1 (n : nat) : 0 < bit1 n :=
-zero_lt_succ _
-
-protected lemma zero_lt_bit0 : ∀ {n : nat}, n ≠ 0 → 0 < bit0 n
-| 0        h := by contradiction
-| (succ n) h :=
-  begin
-    rw nat.bit0_succ_eq,
-    apply zero_lt_succ
-  end
 
 protected lemma one_lt_bit1 : ∀ {n : nat}, n ≠ 0 → 1 < bit1 n
 | 0        h := by contradiction
@@ -583,7 +538,7 @@ begin
     { cases not_succ_le_zero _ h₀ },
     { simp [succ_sub_succ] at h₁,
       apply succ_le_succ,
-      apply ih_1 _ h₁,
+      apply n_ih _ h₁,
       apply le_of_succ_le_succ h₀ }, }
 end
 
@@ -876,9 +831,9 @@ begin
   apply le_div_iff_mul_le _ _ Hk
 end
 
-def iterate {A : Type} (op : A → A) : ℕ → A → A
- | 0 := λ a, a
- | (succ k) := λ a, op (iterate k a)
+def iterate {α : Sort u} (op : α → α) : ℕ → α → α
+ | 0        a := a
+ | (succ k) a := iterate k (op a)
 
 notation f`^[`n`]` := iterate f n
 
@@ -896,7 +851,7 @@ theorem succ_inj {n m : ℕ} (H : succ n = succ m) : n = m :=
 nat.succ.inj_arrow H id
 
 theorem discriminate {B : Sort u} {n : ℕ} (H1: n = 0 → B) (H2 : ∀m, n = succ m → B) : B :=
-by ginduction n with h; [exact H1 h, exact H2 _ h]
+by induction h : n; [exact H1 h, exact H2 _ h]
 
 theorem one_succ_zero : 1 = succ 0 := rfl
 
@@ -987,7 +942,7 @@ theorem le_mul_self : Π (n : ℕ), n ≤ n * n
 /- subtraction -/
 
 protected theorem sub_le_sub_left {n m : ℕ} (k) (h : n ≤ m) : k - m ≤ k - n :=
-by induction h; [refl, exact le_trans (pred_le _) ih_1]
+by induction h; [refl, exact le_trans (pred_le _) h_ih]
 
 theorem succ_sub_sub_succ (n m k : ℕ) : succ n - m - succ k = n - m - k :=
 by rw [nat.sub_sub, nat.sub_sub, add_succ, succ_sub_succ]
@@ -1129,11 +1084,9 @@ by rw [mul_comm x z, mul_comm y z, mul_comm (x % y) z]; apply mul_mod_mul_left
 theorem cond_to_bool_mod_two (x : ℕ) [d : decidable (x % 2 = 1)]
 : cond (@to_bool (x % 2 = 1) d) 1 0 = x % 2 :=
 begin
-  cases d with h h
-  ; unfold decidable.to_bool cond,
-  { cases mod_two_eq_zero_or_one x with h' h',
-    rw h', cases h h' },
-  { rw h },
+  by_cases h : x % 2 = 1,
+  { simp! [*] },
+  { cases mod_two_eq_zero_or_one x; simp! [*] }
 end
 
 theorem sub_mul_mod (x k n : ℕ) (h₁ : n*k ≤ x) : (x - n*k) % n = x % n :=
@@ -1148,7 +1101,7 @@ begin
     { apply @nat.le_of_add_le_add_right (n*k),
       rw [nat.sub_add_cancel h₂],
       simp [mul_succ] at h₁, simp [h₁] },
-    rw [mul_succ, ← nat.sub_sub, ← mod_eq_sub_mod h₄, ih_1 h₂] }
+    rw [mul_succ, ← nat.sub_sub, ← mod_eq_sub_mod h₄, k_ih h₂] }
 end
 
 /- div -/
@@ -1168,7 +1121,7 @@ begin
         rw [nat.sub_add_cancel h₂, add_comm],
         rw [mul_succ] at h₁,
         apply h₁ },
-      rw [sub_succ, ← ih_1 h₂],
+      rw [sub_succ, ← p_ih h₂],
       rw [@div_eq_sub_div (x - n*p) _ h₀ h₃],
       simp [add_one, pred_succ, mul_succ, nat.sub_sub] } }
 end
@@ -1326,11 +1279,11 @@ by rw [mul_comm m k, mul_comm n k] at H; exact dvd_of_mul_dvd_mul_left kpos H
 
 @[simp] theorem pow_one (b : ℕ) : b^1 = b := by simp [pow_succ]
 
-theorem pow_le_pow_of_le_left {x y : ℕ} (H : x ≤ y) : ∀ i, x^i ≤ y^i
+theorem pow_le_pow_of_le_left {x y : ℕ} (H : x ≤ y) : ∀ i : ℕ, x^i ≤ y^i
 | 0 := le_refl _
 | (succ i) := mul_le_mul (pow_le_pow_of_le_left i) H (zero_le _) (zero_le _)
 
-theorem pow_le_pow_of_le_right {x : ℕ} (H : x > 0) {i} : ∀ {j}, i ≤ j → x^i ≤ x^j
+theorem pow_le_pow_of_le_right {x : ℕ} (H : x > 0) {i : ℕ} : ∀ {j}, i ≤ j → x^i ≤ x^j
 | 0        h := by rw eq_zero_of_le_zero h; apply le_refl
 | (succ j) h := (lt_or_eq_of_le h).elim
   (λhl, by rw [pow_succ, ← mul_one (x^i)]; exact
@@ -1351,7 +1304,7 @@ begin
     (pos_pow_of_pos _ $ lt_of_le_of_lt (zero_le _) H)
 end
 
-theorem pow_lt_pow_of_lt_right {x : ℕ} (H : x > 1) {i j} (h : i < j) : x^i < x^j :=
+theorem pow_lt_pow_of_lt_right {x : ℕ} (H : x > 1) {i j : ℕ} (h : i < j) : x^i < x^j :=
 begin
   have xpos := lt_of_succ_lt H,
   refine lt_of_lt_of_le _ (pow_le_pow_of_le_right xpos h),
@@ -1360,6 +1313,8 @@ begin
 end
 
 /- mod / div / pow -/
+
+local attribute [simp] mul_comm
 
 theorem mod_pow_succ {b : ℕ} (b_pos : b > 0) (w m : ℕ)
 : m % (b^succ w) = b * (m/b % b^w) + m % b :=
@@ -1393,4 +1348,16 @@ begin
       simp [h₁] },
     rw [eq.symm (mod_eq_sub_mod p_b_ge)] }
 end
+
+lemma div_lt_self {n m : nat} : n > 0 → m > 1 → n / m < n :=
+begin
+  intros h₁ h₂,
+  have m_pos : m > 0, { apply lt_trans _ h₂, comp_val },
+  suffices : 1 * n < m * n, {
+    simp at this,
+    exact iff.mpr (div_lt_iff_lt_mul n n m_pos) this
+  },
+  exact mul_lt_mul h₂ (le_refl _) h₁ (nat.zero_le _)
+end
+
 end nat

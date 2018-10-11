@@ -4,12 +4,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Gabriel Ebner
 -/
 import leanpkg.lean_version system.io
-variable [io.interface]
 
 namespace leanpkg
 
 def upstream_git_branch :=
-if lean_version.is_release then
+if lean.is_release then
     "lean-" ++ lean_version_string_core
 else
     "master"
@@ -28,5 +27,10 @@ def git_parse_origin_revision (git_repo_dir : string) (rev : string) : io string
 def git_latest_origin_revision (git_repo_dir : string) : io string := do
 io.cmd {cmd := "git", args := ["fetch"], cwd := git_repo_dir},
 git_parse_origin_revision git_repo_dir upstream_git_branch
+
+def git_revision_exists (git_repo_dir : string) (rev : string) : io bool := do
+some _ ← optional (git_parse_revision git_repo_dir (rev ++ "^{commit}"))
+  | pure ff,
+pure tt
 
 end leanpkg

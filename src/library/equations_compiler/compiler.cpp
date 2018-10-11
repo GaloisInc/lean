@@ -10,6 +10,7 @@ Author: Leonardo de Moura
 #include "kernel/instantiate.h"
 #include "library/trace.h"
 #include "library/locals.h"
+#include "library/util.h"
 #include "library/replace_visitor.h"
 #include "library/equations_compiler/compiler.h"
 #include "library/equations_compiler/util.h"
@@ -28,10 +29,8 @@ static bool has_nested_rec(expr const & eqns) {
             }));
 }
 
-static eqn_compiler_result compile_equations_core(environment & env, options const & opts,
-                                   metavar_context & mctx, local_context const & lctx,
-                                   expr const & eqns, elaborator & elab) {
-    type_context ctx(env, opts, mctx, lctx, transparency_mode::Semireducible);
+static eqn_compiler_result compile_equations_core(environment & env, elaborator & elab, metavar_context & mctx, local_context const & lctx, expr const & eqns) {
+    type_context_old ctx(env, mctx, lctx, elab.get_cache(), transparency_mode::Semireducible);
     trace_compiler(tout() << "compiling\n" << eqns << "\n";);
     trace_compiler(tout() << "recursive:          " << is_recursive_eqns(ctx, eqns) << "\n";);
     trace_compiler(tout() << "nested recursion:   " << has_nested_rec(eqns) << "\n";);
@@ -43,22 +42,22 @@ static eqn_compiler_result compile_equations_core(environment & env, options con
         if (is_wf_equations(eqns)) {
             throw exception("invalid use of 'using_well_founded', we do not need to use well founded recursion for meta definitions, since they can use unbounded recursion");
         }
-        return unbounded_rec(env, opts, mctx, lctx, eqns, elab);
+        return unbounded_rec(env, elab, mctx, lctx, eqns);
     }
 
     if (is_wf_equations(eqns)) {
-        return wf_rec(env, opts, mctx, lctx, eqns, elab);
+        return wf_rec(env, elab, mctx, lctx, eqns);
     }
 
     if (header.m_num_fns == 1) {
         if (!is_recursive_eqns(ctx, eqns)) {
-            return mk_nonrec(env, opts, mctx, lctx, eqns, elab);
-        } else if (auto r = try_structural_rec(env, opts, mctx, lctx, eqns, elab)) {
+            return mk_nonrec(env, elab, mctx, lctx, eqns);
+        } else if (auto r = try_structural_rec(env, elab, mctx, lctx, eqns)) {
             return *r;
         }
     }
 
-    return wf_rec(env, opts, mctx, lctx, eqns, elab);
+    return wf_rec(env, elab, mctx, lctx, eqns);
 }
 
 /** Auxiliary class for pulling nested recursive calls.
@@ -88,15 +87,15 @@ static eqn_compiler_result compile_equations_core(environment & env, options con
     Compile the match, and then beta-reduce.
 */
 struct pull_nested_rec_fn : public replace_visitor {
-    environment &         m_env;
-    options               m_opts;
-    metavar_context &     m_mctx;
-    buffer<local_context> m_lctx_stack;
-    buffer<expr>          m_new_locals;
-    buffer<expr>          m_new_values;
+    environment &            m_env;
+    elaborator &             m_elab;
+    metavar_context &        m_mctx;
+    buffer<local_context>    m_lctx_stack;
+    buffer<expr>             m_new_locals;
+    buffer<expr>             m_new_values;
 
-    pull_nested_rec_fn(environment & env, options const & opts, metavar_context & mctx, local_context const & lctx):
-        m_env(env), m_opts(opts), m_mctx(mctx) {
+    pull_nested_rec_fn(environment & env, elaborator & elab, metavar_context & mctx, local_context const & lctx):
+        m_env(env), m_elab(elab), m_mctx(mctx) {
         m_lctx_stack.push_back(lctx);
     }
 
@@ -104,8 +103,8 @@ struct pull_nested_rec_fn : public replace_visitor {
 
     local_context & lctx() { return m_lctx_stack.back(); }
 
-    type_context mk_type_context(local_context const & lctx) {
-        return type_context(m_env, m_opts, m_mctx, lctx, transparency_mode::Semireducible);
+    type_context_old mk_type_context(local_context const & lctx) {
+        return type_context_old(m_env, m_mctx, lctx, m_elab.get_cache(), transparency_mode::Semireducible);
     }
 
     expr visit_lambda_pi_let(bool is_lam, expr const & e) {
@@ -133,7 +132,7 @@ struct pull_nested_rec_fn : public replace_visitor {
         }
         t = instantiate_rev(t, locals.size(), locals.data());
         t = visit(t);
-        type_context ctx = mk_type_context(lctx());
+        type_context_old ctx = mk_type_context(lctx());
         t = is_lam ? ctx.mk_lambda(locals, t) : ctx.mk_pi(locals, t);
         m_mctx = ctx.mctx();
         m_lctx_stack.pop_back();
@@ -210,7 +209,7 @@ struct pull_nested_rec_fn : public replace_visitor {
        if the recursive call will be defined using well founded recursion.
     */
     void collect_local_props(name_set & found, buffer<expr> & R) {
-        type_context ctx = mk_type_context(lctx());
+        type_context_old ctx = mk_type_context(lctx());
         lctx().for_each([&](local_decl const & d) {
                 if (!base_lctx().find_local_decl(d.get_name()) &&
                     !found.contains(d.get_name()) &&
@@ -252,13 +251,29 @@ struct pull_nested_rec_fn : public replace_visitor {
         return r;
     }
 
-    virtual expr visit_app(expr const & e) override {
-        buffer<expr> args;
-        expr const & fn = get_app_args(e, args);
+    virtual expr visit_app(expr const & _e) override {
+        expr const & fn = get_app_fn(_e);
         if (is_local(fn) && local_info(fn).is_rec() && base_lctx().find_local_decl(fn)) {
+            /* `_e` may contain references to let-variables.
+               Here is an example from issue #1917
+
+               ```
+               def foo : ℕ → false
+               | x :=
+                 match x with
+                 y := let z := y in foo z
+                 end
+               ```
+
+               We address this issue by using zeta-expansion.
+               Remark: this may cause an unintended code size blowup.
+             */
+            expr e = zeta_expand(lctx(), _e);
+            buffer<expr> args;
+            get_app_args(e, args);
             buffer<expr> local_deps;
             collect_locals(e, local_deps);
-            type_context ctx = mk_type_context(lctx());
+            type_context_old ctx = mk_type_context(lctx());
             expr val         = ctx.mk_lambda(local_deps, e);
             expr val_type    = ctx.infer(val);
             name fn_aux      = name("_f").append_after(m_new_locals.size() + 1);
@@ -273,16 +288,18 @@ struct pull_nested_rec_fn : public replace_visitor {
             }
             return r;
         } else {
-            return default_visit_app(e, fn, args);
+            buffer<expr> args;
+            get_app_args(_e, args);
+            return default_visit_app(_e, fn, args);
         }
     }
 
-    eqn_compiler_result operator()(expr const & e, elaborator & elab) {
+    eqn_compiler_result operator()(expr const & e) {
         expr new_e             = visit(e);
         lean_assert(m_lctx_stack.size() == 1);
         local_context new_lctx = m_lctx_stack[0];
-        auto r                 = compile_equations_core(m_env, m_opts, m_mctx, new_lctx, new_e, elab);
-        type_context ctx       = mk_type_context(new_lctx);
+        auto r                 = compile_equations_core(m_env, m_elab, m_mctx, new_lctx, new_e);
+        type_context_old ctx       = mk_type_context(new_lctx);
         r.m_fns = map(r.m_fns, [&] (expr const & fn) { return replace_locals(fn, m_new_locals, m_new_values); });
         m_mctx                 = ctx.mctx();
         return r;
@@ -302,19 +319,19 @@ static expr remove_aux_main_name(expr const & e) {
     return e;
 }
 
-expr compile_equations(environment & env, options const & opts, metavar_context & mctx, local_context const & lctx,
-                       expr const & _eqns, elaborator & elab) {
+static expr compile_equations_main(environment & env, elaborator & elab,
+                                   metavar_context & mctx, local_context const & lctx, expr const & _eqns, bool report_cexs) {
     expr eqns = _eqns;
     equations_header const & header = get_equations_header(eqns);
     eqn_compiler_result r;
     if (!header.m_is_meta && has_nested_rec(eqns)) {
-        r = pull_nested_rec_fn(env, opts, mctx, lctx)(eqns, elab);
+        r = pull_nested_rec_fn(env, elab, mctx, lctx)(eqns);
     } else {
-        r = compile_equations_core(env, opts, mctx, lctx, eqns, elab);
+        r = compile_equations_core(env, elab, mctx, lctx, eqns);
     }
 
-    if (r.m_counter_examples) {
-        auto pp = mk_pp_ctx(env, opts, mctx, lctx);
+    if (report_cexs && r.m_counter_examples) {
+        auto pp = mk_pp_ctx(env, elab.get_options(), mctx, lctx);
         auto fmt = format("non-exhaustive match, the following cases are missing:");
         for (auto & ce : r.m_counter_examples) {
             fmt += line() + pp(remove_aux_main_name(ce));
@@ -326,8 +343,32 @@ expr compile_equations(environment & env, options const & opts, metavar_context 
     return mk_equations_result(fns.size(), fns.data());
 }
 
+expr compile_equations(environment & env, elaborator & elab, metavar_context & mctx, local_context const & lctx, expr const & eqns) {
+    equations_header const & header = get_equations_header(eqns);
+    type_context_old ctx(env, mctx, lctx, elab.get_cache(), transparency_mode::Semireducible);
+    if (!header.m_is_meta &&
+        !header.m_is_lemma &&
+        !header.m_is_noncomputable &&
+        /* Remark: we don't need special compilation scheme for non recursive equations */
+        is_recursive_eqns(ctx, eqns)) {
+        /* We compile non-meta recursive definitions as meta definitions first.
+           The motivations are:
+           - Clear execution cost semantics for recursive functions.
+           - Auxiliary meta definition may assist recursive definition unfolding in the type_context_old object.
+        */
+        equations_header aux_header = header;
+        aux_header.m_is_meta    = true;
+        aux_header.m_aux_lemmas = false;
+        aux_header.m_fn_actual_names = map(header.m_fn_actual_names, mk_aux_meta_rec_name);
+        expr aux_eqns = remove_wf_annotation_from_equations(update_equations(eqns, aux_header));
+        compile_equations_main(env, elab, mctx, lctx, aux_eqns, false);
+    }
+    return compile_equations_main(env, elab, mctx, lctx, eqns, true);
+}
+
 void initialize_compiler() {
 }
+
 void finalize_compiler() {
 }
 }
